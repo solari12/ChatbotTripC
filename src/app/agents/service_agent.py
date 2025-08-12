@@ -42,16 +42,27 @@ class ServiceAgent:
             if detected_type:
                 service_type = detected_type
             
+            # Extract search criteria from query
+            search_criteria = self._extract_search_criteria(query)
+            
+            # Build optimized search query
+            optimized_query = self._build_search_query(query, search_criteria)
+            
             # Get services from TripC API based on service type
             if service_type == "restaurant":
-                services = await self.tripc_client.get_restaurants(page=page, page_size=10)
+                # Use search_services for restaurants to get relevant results based on query
+                services = await self.tripc_client.search_services(optimized_query, "restaurant", page=page, page_size=10)
+                
+                # If no results from search, fallback to general restaurant list
+                if not services:
+                    services = await self.tripc_client.get_restaurants(page=page, page_size=10)
             elif service_type == "tour":
-                services = await self.tripc_client.search_services(query, "tour", page=page, page_size=10)
+                services = await self.tripc_client.search_services(optimized_query, "tour", page=page, page_size=10)
             elif service_type == "hotel":
-                services = await self.tripc_client.search_services(query, "hotel", page=page, page_size=10)
+                services = await self.tripc_client.search_services(optimized_query, "hotel", page=page, page_size=10)
             else:
                 # Generic search for other service types
-                services = await self.tripc_client.search_services(query, service_type, page=page, page_size=10)
+                services = await self.tripc_client.search_services(optimized_query, service_type, page=page, page_size=10)
             
             if not services:
                 return await self._get_no_services_response(platform_context, service_type)
@@ -266,19 +277,39 @@ Respond in English, naturally, friendly, under 80 words. Introduce {location} cu
             name = service.name
             description = service.description[:80] if service.description else ""
             address = service.address if service.address else ""
+            city = service.city if service.city else ""
+            rating = service.rating if service.rating else None
+            product_types = service.productTypes if service.productTypes else ""
+            working_hours = service.workingHoursDisplay if service.workingHoursDisplay else ""
             
             if language == "vi":
                 service_info = f"{i}. {name}"
+                if product_types:
+                    service_info += f" ({product_types})"
                 if description:
                     service_info += f" - {description}"
                 if address:
-                    service_info += f" ({address})"
+                    service_info += f" - {address}"
+                if city and city not in address:
+                    service_info += f", {city}"
+                if rating:
+                    service_info += f" - ⭐ {rating}/5"
+                if working_hours:
+                    service_info += f" - Giờ: {working_hours}"
             else:
                 service_info = f"{i}. {name}"
+                if product_types:
+                    service_info += f" ({product_types})"
                 if description:
                     service_info += f" - {description}"
                 if address:
-                    service_info += f" ({address})"
+                    service_info += f" - {address}"
+                if city and city not in address:
+                    service_info += f", {city}"
+                if rating:
+                    service_info += f" - ⭐ {rating}/5"
+                if working_hours:
+                    service_info += f" - Hours: {working_hours}"
             
             service_list.append(service_info)
         
@@ -397,3 +428,72 @@ Respond in English, naturally, friendly, under 80 words. Introduce {location} cu
         except Exception as e:
             logger.error(f"Error getting service detail: {e}")
             return None
+    
+    def _extract_search_criteria(self, query: str) -> Dict[str, str]:
+        """Extract search criteria from user query"""
+        query_lower = query.lower()
+        criteria = {}
+        
+        # Extract location/city
+        location_keywords = ["đà nẵng", "da nang", "hội an", "hoi an", "huế", "hue", "sài gòn", "saigon", "hà nội", "hanoi"]
+        for location in location_keywords:
+            if location in query_lower:
+                criteria["location"] = location
+                break
+        
+        # Extract cuisine type
+        cuisine_keywords = {
+            "hải sản": "seafood",
+            "seafood": "seafood", 
+            "việt nam": "vietnamese",
+            "vietnamese": "vietnamese",
+            "trung quốc": "chinese",
+            "chinese": "chinese",
+            "hàn quốc": "korean",
+            "korean": "korean",
+            "nhật bản": "japanese",
+            "japanese": "japanese",
+            "italy": "italian",
+            "italian": "italian",
+            "pháp": "french",
+            "french": "french",
+            "thái": "thai",
+            "thai": "thai",
+            "món chay": "vegetarian",
+            "vegetarian": "vegetarian"
+        }
+        
+        for cuisine_vi, cuisine_en in cuisine_keywords.items():
+            if cuisine_vi in query_lower or cuisine_en in query_lower:
+                criteria["cuisine"] = cuisine_en
+                break
+        
+        # Extract price range
+        if any(word in query_lower for word in ["rẻ", "cheap", "giá rẻ", "affordable"]):
+            criteria["price_range"] = "low"
+        elif any(word in query_lower for word in ["đắt", "expensive", "cao cấp", "luxury", "premium"]):
+            criteria["price_range"] = "high"
+        
+        # Extract rating preference
+        if any(word in query_lower for word in ["ngon", "tốt", "good", "best", "nổi tiếng", "famous"]):
+            criteria["rating"] = "high"
+        
+        return criteria
+    
+    def _build_search_query(self, original_query: str, criteria: Dict[str, str]) -> str:
+        """Build optimized search query based on extracted criteria"""
+        search_terms = []
+        
+        # Add original query terms
+        search_terms.append(original_query)
+        
+        # Add location if found
+        if "location" in criteria:
+            search_terms.append(criteria["location"])
+        
+        # Add cuisine if found
+        if "cuisine" in criteria:
+            search_terms.append(criteria["cuisine"])
+        
+        # Combine all terms
+        return " ".join(search_terms)

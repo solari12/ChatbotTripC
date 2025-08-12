@@ -2,49 +2,37 @@
 # Copy this file to .env and fill in your actual values
 
 # =============================================================================
-# 🔑 LLM API Configuration (OpenAI/Qwen)
+# 🔑 REQUIRED: API Keys
 # =============================================================================
 
-# Your OpenAI API key (required for LLM-powered responses)
-# Get it from: https://platform.openai.com/api-keys
+# OpenAI API key (required for LLM responses)
 OPENAI_API_KEY=your_openai_api_key_here
 
-# OpenAI API base URL (optional, defaults to OpenAI)
-# For Qwen: https://dashscope.aliyuncs.com/compatible-mode/v1
-# For local models: http://localhost:8000/v1
-OPENAI_BASE_URL=https://api.openai.com/v1
-
-# LLM model to use (optional, defaults to gpt-4o-mini)
-# Options: gpt-4o-mini, gpt-4o, gpt-3.5-turbo, qwen-turbo, qwen-plus
-OPENAI_MODEL=gpt-4o-mini
+# TripC API token (required for service data)
+TRIPC_API_TOKEN=your_tripc_api_token_here
 
 # =============================================================================
 # 🏢 TripC API Configuration
 # =============================================================================
 
-# TripC API access token (required for service data)
-# Get it from TripC admin panel
-TRIPC_API_TOKEN=your_tripc_api_token_here
-
-# TripC API base URL (optional, defaults to production)
+# TripC API base URL
 TRIPC_API_BASE_URL=https://api.tripc.ai
 
 # =============================================================================
-# 🗄️ Database Configuration
+# 🗄️ Database (Optional - for production)
 # =============================================================================
 
 # PostgreSQL connection string
-# Format: postgresql://username:password@host:port/database
 DATABASE_URL=postgresql://username:password@localhost:5432/tripc_chatbot
 
-# PgVector extension database (for embeddings)
+# PgVector database (for embeddings)
 VECTOR_DATABASE_URL=postgresql://username:password@localhost:5432/tripc_vectors
 
 # =============================================================================
-# 📧 Email Service Configuration
+# 📧 Email Service (Optional)
 # =============================================================================
 
-# SMTP server configuration for booking emails
+# SMTP configuration for booking emails
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USERNAME=your_email@gmail.com
@@ -58,71 +46,27 @@ NOREPLY_EMAIL=noreply@tripc.ai
 # 🌐 Server Configuration
 # =============================================================================
 
-# Server host and port
+# Server settings
 HOST=0.0.0.0
 PORT=8000
-
-# Environment (development, staging, production)
 ENVIRONMENT=development
-
-# Debug mode (true/false)
 DEBUG=true
-
-# =============================================================================
-# 🔒 Security Configuration
-# =============================================================================
-
-# Secret key for JWT tokens (generate a random string)
-SECRET_KEY=your_secret_key_here_32_characters_long
-
-# CORS origins (comma-separated)
-CORS_ORIGINS=http://localhost:3000,https://danang.tripc.ai,https://hoian.tripc.ai
-
-# =============================================================================
-# 📊 Monitoring & Analytics
-# =============================================================================
-
-# Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-LOG_LEVEL=INFO
-
-# Enable request logging (true/false)
-ENABLE_REQUEST_LOGGING=true
-
-# =============================================================================
-# 🧪 Testing Configuration
-# =============================================================================
-
-# Test mode (true/false)
-TESTING=false
-
-# Mock external APIs in test mode (true/false)
-MOCK_EXTERNAL_APIS=true
 
 # =============================================================================
 # 📱 App Store URLs (for CTA system)
 # =============================================================================
 
-# Android Play Store URL
+# App download URLs
 ANDROID_STORE_URL=https://play.google.com/store/apps/details?id=com.tripc.ai.app
-
-# iOS App Store URL
 IOS_STORE_URL=https://apps.apple.com/vn/app/tripc-app/id6745506417
-
-# General app download URL
 GENERAL_APP_URL=https://tripc.ai/mobileapp
 
 # =============================================================================
 # 🎯 Feature Flags
 # =============================================================================
 
-# Enable LLM responses (true/false)
+# Enable/disable features
 ENABLE_LLM_RESPONSES=true
-
-# Enable vector search (true/false)
 ENABLE_VECTOR_SEARCH=true
-
-# Enable email booking (true/false)
 ENABLE_EMAIL_BOOKING=true
-
-# Enable platform-aware CTA (true/false)
 ENABLE_PLATFORM_CTA=true

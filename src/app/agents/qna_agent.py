@@ -64,29 +64,67 @@ class QnAAgent:
     
     async def _generate_llm_suggestions(self, query: str, results: List[Dict[str, Any]], 
                                       platform_context: PlatformContext) -> List[Suggestion]:
-        """Generate contextual suggestions using LLM"""
+        """Generate contextual suggestions using LLM with platform-aware strategy"""
         
         try:
             language = platform_context.language.value
+            platform = platform_context.platform.value
+            device = platform_context.device.value
             
             if language == "vi":
-                prompt = f"""Dựa trên câu hỏi: "{query}", hãy đề xuất 3 hành động hữu ích mà người dùng có thể thực hiện tiếp theo.
-                
-                Trả về chính xác theo format JSON này (không có text thêm):
-                [
-                    {{"label": "Tìm nhà hàng", "detail": "Khám phá các nhà hàng nổi tiếng", "action": "show_services"}},
-                    {{"label": "Địa điểm du lịch", "detail": "Tìm hiểu về các điểm đến hấp dẫn", "action": "show_attractions"}},
-                    {{"label": "Đặt chỗ ngay", "detail": "Đặt bàn tại nhà hàng yêu thích", "action": "collect_user_info"}}
-                ]"""
+                prompt = f"""Dựa trên câu hỏi: "{query}", hãy đề xuất 3 hành động hữu ích và liên quan mà người dùng có thể thực hiện tiếp theo.
+
+Yêu cầu BẮT BUỘC:
+1. Suggestions phải liên quan trực tiếp đến nội dung câu hỏi
+2. Nếu hỏi về nhà hàng → đề xuất tìm nhà hàng, đặt bàn, xem menu
+3. Nếu hỏi về địa điểm → đề xuất khám phá địa điểm, tìm hiểu thêm, đặt tour
+4. Nếu hỏi về văn hóa → đề xuất tìm hiểu văn hóa, tham quan, trải nghiệm
+5. Nếu hỏi chung chung → đề xuất các dịch vụ chính
+
+QUY TẮC PLATFORM (BẮT BUỘC TUÂN THEO):
+- Platform: {platform}, Device: {device}
+- Nếu web_browser: PHẢI có ít nhất 1 suggestion với action="download_app"
+- Nếu mobile_app: PHẢI có ít nhất 1 suggestion với action="collect_user_info"
+
+Ví dụ cho web_browser:
+- Nếu hỏi nhà hàng: [show_services, show_services, download_app]
+- Nếu hỏi địa điểm: [show_attractions, show_attractions, download_app]
+
+Ví dụ cho mobile_app:
+- Nếu hỏi nhà hàng: [show_services, show_services, collect_user_info]
+- Nếu hỏi địa điểm: [show_attractions, show_attractions, collect_user_info]
+
+Trả về chính xác theo format JSON này (không có text thêm):
+[
+    {{"label": "Tên suggestion", "detail": "Mô tả chi tiết", "action": "show_services|show_attractions|collect_user_info|show_culture|download_app"}}
+]"""
             else:
-                prompt = f"""Based on the question: "{query}", suggest 3 useful actions the user can take next.
-                
-                Return exactly in this JSON format (no additional text):
-                [
-                    {{"label": "Find restaurants", "detail": "Discover famous restaurants", "action": "show_services"}},
-                    {{"label": "Tourist attractions", "detail": "Learn about exciting destinations", "action": "show_attractions"}},
-                    {{"label": "Book now", "detail": "Make a reservation at your favorite restaurant", "action": "collect_user_info"}}
-                ]"""
+                prompt = f"""Based on the question: "{query}", suggest 3 useful and relevant actions the user can take next.
+
+MANDATORY Requirements:
+1. Suggestions must be directly related to the question content
+2. If asking about restaurants → suggest finding restaurants, making reservations, viewing menus
+3. If asking about attractions → suggest exploring places, learning more, booking tours
+4. If asking about culture → suggest learning about culture, visiting sites, experiencing
+5. If asking generally → suggest main services
+
+PLATFORM RULES (MUST FOLLOW):
+- Platform: {platform}, Device: {device}
+- If web_browser: MUST include at least 1 suggestion with action="download_app"
+- If mobile_app: MUST include at least 1 suggestion with action="collect_user_info"
+
+Examples for web_browser:
+- If asking about restaurants: [show_services, show_services, download_app]
+- If asking about attractions: [show_attractions, show_attractions, download_app]
+
+Examples for mobile_app:
+- If asking about restaurants: [show_services, show_services, collect_user_info]
+- If asking about attractions: [show_attractions, show_attractions, collect_user_info]
+
+Return exactly in this JSON format (no additional text):
+[
+    {{"label": "Suggestion name", "detail": "Detailed description", "action": "show_services|show_attractions|collect_user_info|show_culture|download_app"}}
+]"""
             
             # Use ask_llm for suggestions instead of self.llm_client
             response = ask_llm(f"Suggestions: {prompt}", [prompt])
@@ -109,11 +147,16 @@ class QnAAgent:
                         valid_suggestions = []
                         for s in suggestions_data[:3]:
                             if isinstance(s, dict) and s.get("label") and s.get("action"):
+                                # Validate action type
+                                action = s.get("action", "show_services")
+                                if action not in ["show_services", "show_attractions", "collect_user_info", "show_culture", "download_app"]:
+                                    action = "show_services"  # Default fallback
+                                
                                 valid_suggestions.append(
                                     Suggestion(
                                         label=s.get("label", ""),
                                         detail=s.get("detail"),
-                                        action=s.get("action", "show_services")
+                                        action=action
                                     )
                                 )
                         
@@ -175,45 +218,84 @@ class QnAAgent:
         return self._get_default_suggestions(platform_context)
     
     def _get_default_suggestions(self, platform_context: PlatformContext) -> List[Suggestion]:
-        """Get default suggestions when LLM is not available"""
+        """Get default suggestions when LLM is not available - platform-aware"""
         language = platform_context.language.value
+        platform = platform_context.platform.value
         
         if language == "vi":
-            return [
-                Suggestion(
-                    label="Tìm nhà hàng gần đây",
-                    detail="Khám phá các nhà hàng nổi tiếng tại Đà Nẵng",
-                    action="show_services"
-                ),
-                Suggestion(
-                    label="Địa điểm du lịch",
-                    detail="Tìm hiểu về các điểm đến hấp dẫn",
-                    action="show_attractions"
-                ),
-                Suggestion(
-                    label="Đặt chỗ ngay",
-                    detail="Đặt bàn tại nhà hàng yêu thích",
-                    action="collect_user_info"
-                )
-            ]
-        else:
-            return [
-                Suggestion(
-                    label="Find nearby restaurants",
-                    detail="Discover famous restaurants in Da Nang",
-                    action="show_services"
-                ),
-                Suggestion(
-                    label="Tourist attractions",
-                    detail="Learn about exciting destinations",
-                    action="show_attractions"
-                ),
-                Suggestion(
-                    label="Book now",
-                    detail="Make a reservation at your favorite restaurant",
-                    action="collect_user_info"
-                )
-            ]
+            if platform == "web_browser":
+                return [
+                    Suggestion(
+                        label="Tìm nhà hàng gần đây",
+                        detail="Khám phá các nhà hàng nổi tiếng tại Đà Nẵng",
+                        action="show_services"
+                    ),
+                    Suggestion(
+                        label="Địa điểm du lịch",
+                        detail="Tìm hiểu về các điểm đến hấp dẫn",
+                        action="show_attractions"
+                    ),
+                    Suggestion(
+                        label="Tải app TripC",
+                        detail="Tải app để xem chi tiết và đặt chỗ dễ dàng",
+                        action="download_app"
+                    )
+                ]
+            else:  # mobile_app
+                return [
+                    Suggestion(
+                        label="Tìm nhà hàng gần đây",
+                        detail="Khám phá các nhà hàng nổi tiếng tại Đà Nẵng",
+                        action="show_services"
+                    ),
+                    Suggestion(
+                        label="Địa điểm du lịch",
+                        detail="Tìm hiểu về các điểm đến hấp dẫn",
+                        action="show_attractions"
+                    ),
+                    Suggestion(
+                        label="Đặt chỗ ngay",
+                        detail="Đặt bàn tại nhà hàng yêu thích",
+                        action="collect_user_info"
+                    )
+                ]
+        else:  # English
+            if platform == "web_browser":
+                return [
+                    Suggestion(
+                        label="Find nearby restaurants",
+                        detail="Discover famous restaurants in Da Nang",
+                        action="show_services"
+                    ),
+                    Suggestion(
+                        label="Tourist attractions",
+                        detail="Learn about exciting destinations",
+                        action="show_attractions"
+                    ),
+                    Suggestion(
+                        label="Download TripC App",
+                        detail="Download the app to view details and make bookings easily",
+                        action="download_app"
+                    )
+                ]
+            else:  # mobile_app
+                return [
+                    Suggestion(
+                        label="Find nearby restaurants",
+                        detail="Discover famous restaurants in Da Nang",
+                        action="show_services"
+                    ),
+                    Suggestion(
+                        label="Tourist attractions",
+                        detail="Learn about exciting destinations",
+                        action="show_attractions"
+                    ),
+                    Suggestion(
+                        label="Book now",
+                        detail="Make a reservation at your favorite restaurant",
+                        action="collect_user_info"
+                    )
+                ]
     
     async def _get_fallback_response(self, query: str, platform_context: PlatformContext) -> QnAResponse:
         """Get fallback response when vector search fails"""

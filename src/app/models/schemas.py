@@ -1,4 +1,4 @@
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Dict
 from pydantic import BaseModel, Field
 from .platform_models import PlatformType, DeviceType, LanguageType
 
@@ -41,9 +41,17 @@ class Service(BaseModel):
     name: str
     type: str
     imageUrl: Optional[str] = None
+    coverImageUrl: Optional[str] = None
+    rating: Optional[float] = None
+    totalReviews: Optional[int] = None
     address: Optional[str] = None
+    city: Optional[str] = None
+    productTypes: Optional[str] = None
     description: Optional[str] = None
     priceRange: Optional[str] = None
+    workingHoursDisplay: Optional[str] = None
+    amenities: Optional[List[str]] = None
+    location: Optional[Dict[str, float]] = None
     # Note: NO webURL or deeplink fields - app-first policy
 
 

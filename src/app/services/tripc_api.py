@@ -54,9 +54,17 @@ class TripCAPIClient:
                     name=item.get("name", ""),
                     type="restaurant",
                     imageUrl=item.get("logo_url") or item.get("cover_image_url"),
+                    coverImageUrl=item.get("cover_image_url"),
+                    rating=item.get("rating"),
+                    totalReviews=item.get("total_reviews"),
                     address=item.get("address", ""),
+                    city=item.get("city", ""),
+                    productTypes=item.get("product_types", ""),
                     description=item.get("description", ""),
-                    priceRange=item.get("price_range", "")
+                    priceRange=item.get("price_range", ""),
+                    workingHoursDisplay=item.get("working_hours_display", ""),
+                    amenities=item.get("amenities", []),
+                    location=item.get("location")
                 )
                 restaurants.append(restaurant)
             
@@ -82,9 +90,17 @@ class TripCAPIClient:
                 name=data.get("name", ""),
                 type="restaurant",
                 imageUrl=data.get("logo_url") or data.get("cover_image_url"),
+                coverImageUrl=data.get("cover_image_url"),
+                rating=data.get("rating"),
+                totalReviews=data.get("total_reviews"),
                 address=data.get("address", ""),
+                city=data.get("city", ""),
+                productTypes=data.get("product_types", ""),
                 description=data.get("description", ""),
-                priceRange=data.get("price_range", "")
+                priceRange=data.get("price_range", ""),
+                workingHoursDisplay=data.get("working_hours_display", ""),
+                amenities=data.get("amenities", []),
+                location=data.get("location")
             )
             
             return restaurant
@@ -146,9 +162,17 @@ class TripCAPIClient:
                     name=item.get("name", ""),
                     type=item.get("type", service_type),
                     imageUrl=item.get("logo_url") or item.get("cover_image_url"),
+                    coverImageUrl=item.get("cover_image_url"),
+                    rating=item.get("rating"),
+                    totalReviews=item.get("total_reviews"),
                     address=item.get("address", ""),
+                    city=item.get("city", ""),
+                    productTypes=item.get("product_types", ""),
                     description=item.get("description", ""),
-                    priceRange=item.get("price_range", "")
+                    priceRange=item.get("price_range", ""),
+                    workingHoursDisplay=item.get("working_hours_display", ""),
+                    amenities=item.get("amenities", []),
+                    location=item.get("location")
                 )
                 services.append(service)
             

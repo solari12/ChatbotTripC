@@ -118,12 +118,20 @@ class LangGraphWorkflow:
             
             # Use direct prompts for intent classification
             if language == "vi":
-                system_prompt = """Bạn là một trợ lý AI thông minh. Hãy phân loại ý định của người dùng thành một trong các loại sau:
-                - "service": Khi người dùng muốn tìm kiếm, khám phá hoặc xem thông tin về nhà hàng, địa điểm du lịch
-                - "booking": Khi người dùng muốn đặt chỗ, đặt bàn, đặt tour hoặc thực hiện giao dịch
-                - "qna": Khi người dùng hỏi thông tin chung, tư vấn hoặc không rõ ý định
-                
-                Chỉ trả về một từ: service, booking, hoặc qna."""
+                system_prompt = """Bạn là một trợ lý AI thông minh, có khả năng suy luận và hiểu thấu đáo ý định thực sự của người dùng qua từng câu hỏi.
+
+Hãy phân loại ý định của người dùng thành một trong ba loại sau, dựa trên nội dung và mục đích thật sự của câu hỏi:
+
+- "service": Người dùng muốn tìm kiếm, khám phá hoặc xem thông tin về nhà hàng, địa điểm du lịch hoặc các dịch vụ liên quan.
+- "service": Khi người dùng muốn tìm kiếm danh sách, khám phá hoặc xem các địa điểm, nhà hàng, dịch vụ mới hoặc tổng quan.
+- "qna": Khi người dùng hỏi về thông tin chi tiết, chính sách, câu hỏi cụ thể như giá vé, giờ mở cửa, ưu đãi, tư vấn,...
+
+
+Hãy cân nhắc kỹ và chọn loại phù hợp nhất với ý định sâu xa của người dùng.
+
+Chỉ trả về duy nhất một từ: service, booking, hoặc qna. Không trả lời thêm gì khác.
+
+"""
                 user_prompt = f"Phân loại ý định: {message}"
             else:
                 system_prompt = """You are an intelligent AI assistant. Classify the user's intent into one of the following types:
@@ -144,7 +152,6 @@ class LangGraphWorkflow:
                         model="gpt-3.5-turbo",  # Use appropriate model
                         max_tokens=10
                     )
-                    
                     # Extract intent from LLM response
                     intent_response = llm_response.strip().lower() if llm_response else ""
                     

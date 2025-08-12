@@ -1,6 +1,7 @@
+#qna_agent.py
 from typing import List, Optional, Dict, Any
 from ..models.schemas import QnAResponse, Source, Suggestion
-from ..vector.pgvector_store import PgVectorStore
+from ..vector.pgvector_store import get_embedding, embedding_to_pgvector_str, search_similar, ask_llm
 from ..core.platform_context import PlatformContext
 from ..llm.open_client import OpenAIClient
 import logging
@@ -11,8 +12,7 @@ logger = logging.getLogger(__name__)
 class QnAAgent:
     """QnA Agent using vector embedding search with LLM for natural responses"""
     
-    def __init__(self, vector_store: PgVectorStore, llm_client: OpenAIClient = None):
-        self.vector_store = vector_store
+    def __init__(self, llm_client: OpenAIClient = None):
         self.llm_client = llm_client or OpenAIClient()
         
         # Pre-defined QnA content for common queries
@@ -31,15 +31,12 @@ class QnAAgent:
                              top_k: int = 5) -> QnAResponse:
         """Search for QnA content using vector similarity and LLM for natural responses"""
         try:
-            # Search vector store for similar content
-            results = await self.vector_store.search_similarity(query, top_k=top_k)
             
-            if not results:
-                # Fallback to common responses
-                return await self._get_fallback_response(query, platform_context)
-            
-            # Use LLM to generate natural response based on search results
-            answer_ai = await self._generate_llm_response(query, results, platform_context)
+            emb = get_embedding(query)
+            emb_str = embedding_to_pgvector_str(emb)
+            results = search_similar(emb_str)
+            contexts = [row[2] for row in results]
+            answer_ai = ask_llm(query, contexts)
             
             # Create sources from search results
             sources = [
@@ -65,84 +62,9 @@ class QnAAgent:
             logger.error(f"Error in QnA search: {e}")
             return await self._get_fallback_response(query, platform_context)
     
-    async def _generate_llm_response(self, query: str, results: List[Dict[str, Any]], 
-                                   platform_context: PlatformContext) -> str:
-        """Generate natural response using LLM based on search results"""
-        if not self.llm_client.is_configured():
-            # Fallback to simple formatting if LLM not available
-            return self._simple_fallback_answer(query, results)
-        
-        try:
-            # Prepare context for LLM
-            language = platform_context.language.value
-            context_data = []
-            
-            for i, result in enumerate(results[:3]):  # Use top 3 results
-                content = result.get("content", "")
-                metadata = result.get("metadata", {})
-                title = metadata.get("title", f"Source {i+1}")
-                if content:
-                    context_data.append(f"Source {i+1} ({title}): {content[:300]}...")
-            
-            context_text = "\n\n".join(context_data)
-            
-            # Create LLM prompt
-            if language == "vi":
-                system_prompt = """Bạn là TripC.AI, một trợ lý du lịch thông minh và thân thiện. 
-                Dựa trên thông tin được cung cấp, hãy trả lời câu hỏi của người dùng một cách tự nhiên, 
-                hữu ích và chính xác. Sử dụng giọng điệu thân thiện và cung cấp thông tin thực tế."""
-                user_prompt = f"""Câu hỏi: {query}
-
-Thông tin tham khảo:
-{context_text}
-
-Hãy trả lời câu hỏi trên một cách tự nhiên và hữu ích dựa trên thông tin được cung cấp."""
-            else:
-                system_prompt = """You are TripC.AI, a smart and friendly travel assistant. 
-                Based on the provided information, answer the user's question naturally, 
-                helpfully, and accurately. Use a friendly tone and provide factual information."""
-                user_prompt = f"""Question: {query}
-
-Reference information:
-{context_text}
-
-Please answer the above question naturally and helpfully based on the provided information."""
-            
-            # Generate response using LLM (non-async call)
-            response = self.llm_client.generate_response(
-                prompt=user_prompt,
-                model="gpt-4o-mini",
-                max_tokens=512
-            )
-            
-            if response:
-                return response
-            else:
-                return self._simple_fallback_answer(query, results)
-                
-        except Exception as e:
-            logger.error(f"Error generating LLM response: {e}")
-            return self._simple_fallback_answer(query, results)
-    
-    def _simple_fallback_answer(self, query: str, results: List[Dict[str, Any]]) -> str:
-        """Simple fallback answer when LLM is not available"""
-        if not results:
-            return "Xin lỗi, tôi không tìm thấy thông tin phù hợp cho câu hỏi của bạn."
-        
-        # Use the most relevant result
-        best_result = results[0]
-        answer = best_result.get("content", "")
-        
-        if len(answer) > 300:
-            answer = answer[:300] + "..."
-        
-        return answer
-    
     async def _generate_llm_suggestions(self, query: str, results: List[Dict[str, Any]], 
                                       platform_context: PlatformContext) -> List[Suggestion]:
         """Generate contextual suggestions using LLM"""
-        if not self.llm_client.is_configured():
-            return self._get_default_suggestions(platform_context)
         
         try:
             language = platform_context.language.value
@@ -166,11 +88,8 @@ Please answer the above question naturally and helpfully based on the provided i
                     {{"label": "Book now", "detail": "Make a reservation at your favorite restaurant", "action": "collect_user_info"}}
                 ]"""
             
-            response = self.llm_client.generate_response(
-                prompt=prompt,
-                model="gpt-4o-mini",
-                max_tokens=256
-            )
+            # Use ask_llm for suggestions instead of self.llm_client
+            response = ask_llm(f"Suggestions: {prompt}", [prompt])
             
             if response:
                 try:
@@ -330,25 +249,3 @@ Please answer the above question naturally and helpfully based on the provided i
             suggestions=suggestions
         )
     
-    async def get_restaurant_recommendations(self, platform_context: PlatformContext) -> QnAResponse:
-        """Get restaurant recommendations for QnA context"""
-        answer = "Dưới đây là những nhà hàng tuyệt vời tại Đà Nẵng mà bạn nên thử:"
-        if platform_context.language.value == "en":
-            answer = "Here are some great restaurants in Da Nang that you should try:"
-        
-        sources = [
-            Source(
-                title="TripC Restaurant Guide - Đà Nẵng",
-                url="https://tripc.ai/danang-restaurants",
-                imageUrl="https://cdn.tripc.ai/sources/restaurant-guide.jpg"
-            )
-        ]
-        
-        suggestions = self._get_default_suggestions(platform_context)
-        
-        return QnAResponse(
-            type="QnA",
-            answerAI=answer,
-            sources=sources,
-            suggestions=suggestions
-        )

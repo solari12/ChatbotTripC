@@ -1,0 +1,14 @@
+{
+  "total_nodes": 5,
+  "total_edges": 5,
+  "conditional_edges": 1,
+  "node_types": {
+    "validation": 1,
+    "classification": 1,
+    "routing": 1,
+    "enhancement": 1,
+    "formatting": 1
+  },
+  "workflow_complexity": "Medium",
+  "error_handling": "Yes"
+}

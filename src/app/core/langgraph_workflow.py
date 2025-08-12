@@ -12,6 +12,7 @@ from ..models.schemas import ChatRequest, ChatResponse, QnAResponse
 from ..agents.qna_agent import QnAAgent
 from ..agents.service_agent import ServiceAgent
 from ..core.cta_engine import CTAEngine
+from ..llm.open_client import OpenAIClient
 
 
 class WorkflowState(TypedDict):
@@ -35,9 +36,10 @@ class WorkflowState(TypedDict):
 class LangGraphWorkflow:
     """LangGraph-based workflow for TripC.AI Chatbot"""
     
-    def __init__(self, qna_agent: QnAAgent, service_agent: ServiceAgent):
+    def __init__(self, qna_agent: QnAAgent, service_agent: ServiceAgent, llm_client: OpenAIClient = None):
         self.qna_agent = qna_agent
         self.service_agent = service_agent
+        self.llm_client = llm_client or OpenAIClient()  # Auto-create if not provided
         self.cta_engine = CTAEngine()
         self.workflow = self._build_workflow()
     

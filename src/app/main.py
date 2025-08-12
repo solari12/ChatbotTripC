@@ -21,6 +21,7 @@ from .agents.qna_agent import QnAAgent
 from .agents.service_agent import ServiceAgent
 from .core.langgraph_workflow import LangGraphWorkflow
 from .services.email_service import EmailService
+from .llm.open_client import OpenAIClient
 
 # Global variables for services
 langgraph_workflow: LangGraphWorkflow = None
@@ -46,13 +47,17 @@ async def lifespan(app: FastAPI):
     )
     print("✅ TripC API client initialized")
     
+    # Initialize LLM client
+    llm_client = OpenAIClient()  # Automatically loads from .env
+    print("✅ LLM client initialized")
+    
     # Initialize agents
     qna_agent = QnAAgent(vector_store)
-    service_agent = ServiceAgent(tripc_client)
+    service_agent = ServiceAgent(tripc_client)  # Auto-creates LLM client from .env
     print("✅ AI agents initialized")
     
     # Initialize LangGraph workflow
-    langgraph_workflow = LangGraphWorkflow(qna_agent, service_agent)
+    langgraph_workflow = LangGraphWorkflow(qna_agent, service_agent)  # Auto-creates LLM client from .env
     print("✅ LangGraph workflow initialized")
     
     # Initialize email service

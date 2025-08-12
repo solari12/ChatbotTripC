@@ -5,6 +5,7 @@ from ..core.platform_context import PlatformContextHandler
 from ..core.cta_engine import CTAEngine
 from .qna_agent import QnAAgent
 from .service_agent import ServiceAgent
+from ..llm.open_client import OpenAIClient
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,9 +14,10 @@ logger = logging.getLogger(__name__)
 class AIAgentOrchestrator:
     """Orchestrates AI agents with platform-aware routing"""
     
-    def __init__(self, qna_agent: QnAAgent, service_agent: ServiceAgent):
+    def __init__(self, qna_agent: QnAAgent, service_agent: ServiceAgent, llm_client: OpenAIClient = None):
         self.qna_agent = qna_agent
         self.service_agent = service_agent
+        self.llm_client = llm_client or OpenAIClient()  # Auto-create if not provided
         self.platform_handler = PlatformContextHandler()
         self.cta_engine = CTAEngine()
         

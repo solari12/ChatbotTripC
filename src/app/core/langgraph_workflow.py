@@ -12,7 +12,7 @@ from ..models.schemas import ChatRequest, ChatResponse, QnAResponse
 from ..agents.qna_agent import QnAAgent
 from ..agents.service_agent import ServiceAgent
 from ..core.cta_engine import CTAEngine
-from ..core.prompt_manager import PromptManager
+
 from ..llm.open_client import OpenAIClient
 
 
@@ -42,7 +42,7 @@ class LangGraphWorkflow:
         self.service_agent = service_agent
         self.llm_client = llm_client or OpenAIClient()  # Auto-create if not provided
         self.cta_engine = CTAEngine()
-        self.prompt_manager = PromptManager()
+
         self.workflow = self._build_workflow()
     
     def _build_workflow(self) -> StateGraph:
@@ -116,35 +116,37 @@ class LangGraphWorkflow:
             message = state["message"]
             language = state.get("language", "vi")
             
-            # Get prompts from prompt manager
-            system_prompt = self.prompt_manager.get_intent_system_prompt(language)
-            user_prompt_template = self.prompt_manager.get_intent_user_template(language)
-            
-            if not system_prompt or not user_prompt_template:
-                # Fallback to keyword-based classification if prompts not loaded
-                print("⚠️ Prompts not loaded, using keyword classification")
-                state["intent"] = self._fallback_keyword_classification(message)
-                return state
-            
-            # Format user prompt with actual message
-            user_prompt = user_prompt_template.format(message=message)
+            # Use direct prompts for intent classification
+            if language == "vi":
+                system_prompt = """Bạn là một trợ lý AI thông minh. Hãy phân loại ý định của người dùng thành một trong các loại sau:
+                - "service": Khi người dùng muốn tìm kiếm, khám phá hoặc xem thông tin về nhà hàng, địa điểm du lịch
+                - "booking": Khi người dùng muốn đặt chỗ, đặt bàn, đặt tour hoặc thực hiện giao dịch
+                - "qna": Khi người dùng hỏi thông tin chung, tư vấn hoặc không rõ ý định
+                
+                Chỉ trả về một từ: service, booking, hoặc qna."""
+                user_prompt = f"Phân loại ý định: {message}"
+            else:
+                system_prompt = """You are an intelligent AI assistant. Classify the user's intent into one of the following types:
+                - "service": When the user wants to search, explore, or view information about restaurants, tourist attractions
+                - "booking": When the user wants to make reservations, book tables, book tours, or perform transactions
+                - "qna": When the user asks general information, seeks advice, or intent is unclear
+                
+                Return only one word: service, booking, or qna."""
+                user_prompt = f"Classify intent: {message}"
             
             # Use LLM to classify intent
             if self.llm_client:
                 try:
                     # Get LLM response for intent classification
-                    llm_response = await self.llm_client.chat_completion(
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt}
-                        ],
+                    combined_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}"
+                    llm_response = self.llm_client.generate_response(
+                        prompt=combined_prompt,
                         model="gpt-3.5-turbo",  # Use appropriate model
-                        temperature=0.1,  # Low temperature for consistent classification
                         max_tokens=10
                     )
                     
                     # Extract intent from LLM response
-                    intent_response = llm_response.strip().lower()
+                    intent_response = llm_response.strip().lower() if llm_response else ""
                     
                     # Validate and map intent
                     if "service" in intent_response:
@@ -408,19 +410,3 @@ class LangGraphWorkflow:
                 }
             ]
         }
-    
-    def reload_prompts(self):
-        """Reload prompts from file (useful for development)"""
-        return self.prompt_manager.reload_prompts()
-    
-    def list_available_prompts(self) -> list:
-        """List all available prompt keys"""
-        return self.prompt_manager.list_available_prompts()
-    
-    def validate_prompts(self) -> Dict[str, bool]:
-        """Validate that all required prompts are loaded"""
-        return self.prompt_manager.validate_prompts()
-    
-    def get_prompt(self, key: str) -> str:
-        """Get prompt by key"""
-        return self.prompt_manager.get_prompt(key)

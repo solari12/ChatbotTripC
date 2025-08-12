@@ -15,11 +15,22 @@ class ServiceAgent:
         self.tripc_client = tripc_client
         self.llm_client = llm_client or OpenAIClient()  # Auto-create if not provided
         
-        # Service type mappings
+        # Service type mappings with comprehensive keywords
         self.service_keywords = {
-            "restaurant": ["nhà hàng", "quán ăn", "đồ ăn", "ẩm thực", "restaurant", "food", "dining"],
-            "tour": ["tour", "du lịch", "tham quan", "điểm đến", "attraction", "sightseeing"],
-            "hotel": ["khách sạn", "nơi ở", "accommodation", "hotel", "lodging"]
+            "restaurant": [
+                "nhà hàng", "quán ăn", "đồ ăn", "ẩm thực", "restaurant", "food", "dining",
+                "ăn", "bữa", "món", "nấu", "chế biến", "thực phẩm", "đồ uống", "cafe", "bar"
+            ],
+            "tour": [
+                "tour", "du lịch", "tham quan", "điểm đến", "attraction", "sightseeing",
+                "thăm", "khám phá", "địa điểm", "danh lam", "thắng cảnh", "di tích", "bảo tàng",
+                "công viên", "bãi biển", "núi", "sông", "hồ", "đảo", "chùa", "nhà thờ"
+            ],
+            "hotel": [
+                "khách sạn", "nơi ở", "accommodation", "hotel", "lodging", "resort",
+                "đặt phòng", "nghỉ ngơi", "lưu trú", "homestay", "villa", "căn hộ",
+                "hostel", "motel", "bed & breakfast"
+            ]
         }
     
     async def get_services(self, query: str, platform_context: PlatformContext, 
@@ -31,11 +42,16 @@ class ServiceAgent:
             if detected_type:
                 service_type = detected_type
             
-            # Get services from TripC API
+            # Get services from TripC API based on service type
             if service_type == "restaurant":
                 services = await self.tripc_client.get_restaurants(page=page, page_size=10)
+            elif service_type == "tour":
+                services = await self.tripc_client.search_services(query, "tour", page=page, page_size=10)
+            elif service_type == "hotel":
+                services = await self.tripc_client.search_services(query, "hotel", page=page, page_size=10)
             else:
-                services = await self.tripc_client.search_services(query, service_type, page=page)
+                # Generic search for other service types
+                services = await self.tripc_client.search_services(query, service_type, page=page, page_size=10)
             
             if not services:
                 return await self._get_no_services_response(platform_context, service_type)
@@ -84,14 +100,51 @@ class ServiceAgent:
             return await self._get_error_response(platform_context, "restaurant")
     
     def _detect_service_type(self, query: str) -> Optional[str]:
-        """Detect service type from query text"""
+        """Detect service type from query text with scoring"""
         query_lower = query.lower()
+        scores = {}
         
+        # Calculate scores for each service type
         for service_type, keywords in self.service_keywords.items():
-            if any(keyword in query_lower for keyword in keywords):
-                return service_type
+            score = 0
+            for keyword in keywords:
+                if keyword in query_lower:
+                    score += 1
+                    # Bonus for exact matches
+                    if keyword in query_lower.split():
+                        score += 2
+            scores[service_type] = score
+        
+        # Return service type with highest score
+        if scores:
+            best_type = max(scores, key=scores.get)
+            return best_type if scores[best_type] > 0 else None
         
         return None
+    
+    def _get_service_type_vietnamese(self, service_type: str) -> str:
+        """Convert service type to Vietnamese"""
+        type_mapping = {
+            "restaurant": "nhà hàng",
+            "tour": "điểm du lịch",
+            "hotel": "khách sạn",
+            "attraction": "điểm tham quan",
+            "activity": "hoạt động",
+            "transport": "giao thông"
+        }
+        return type_mapping.get(service_type, service_type)
+    
+    def _get_service_type_english(self, service_type: str) -> str:
+        """Convert service type to English"""
+        type_mapping = {
+            "restaurant": "restaurants",
+            "tour": "tourist attractions",
+            "hotel": "hotels",
+            "attraction": "attractions",
+            "activity": "activities",
+            "transport": "transportation"
+        }
+        return type_mapping.get(service_type, service_type)
     
     async def _generate_llm_response(self, query: str, services: List[Service], 
                                    service_type: str, platform_context: PlatformContext) -> str:
@@ -101,37 +154,27 @@ class ServiceAgent:
             
             # Create context-aware prompt for LLM
             if language == "vi":
-                prompt = f"""
-                Bạn là một trợ lý du lịch thông minh của TripC. Người dùng đang tìm kiếm dịch vụ {service_type} với yêu cầu: "{query}".
+                service_type_vi = self._get_service_type_vietnamese(service_type)
+                prompt = f"""Bạn là TripC.AI, trợ lý du lịch thông minh.
 
-                Dưới đây là danh sách các dịch vụ phù hợp:
-                {self._format_services_for_prompt(services, language)}
-                
-                Hãy tạo một câu trả lời thông minh, thân thiện và hữu ích bằng tiếng Việt. 
-                Câu trả lời nên:
-                - Chào hỏi người dùng một cách thân thiện
-                - Giải thích tại sao những dịch vụ này phù hợp với yêu cầu
-                - Đưa ra gợi ý hoặc lời khuyên hữu ích
-                - Khuyến khích người dùng tải app TripC để xem chi tiết
-                
-                Trả lời ngắn gọn, tự nhiên và không quá 100 từ.
-                """
+Người dùng tìm kiếm: "{query}"
+Loại dịch vụ: {service_type_vi}
+
+Dịch vụ phù hợp:
+{self._format_services_for_prompt(services, language)}
+
+Trả lời bằng tiếng Việt, tự nhiên, thân thiện, dưới 80 từ. Giới thiệu về {service_type_vi} và nhắc người dùng tải app TripC để xem chi tiết."""
             else:
-                prompt = f"""
-                You are an intelligent travel assistant from TripC. The user is looking for {service_type} services with the request: "{query}".
+                service_type_en = self._get_service_type_english(service_type)
+                prompt = f"""You are TripC.AI, an intelligent travel assistant.
 
-                Here are the matching services:
-                {self._format_services_for_prompt(services, language)}
-                
-                Please create an intelligent, friendly, and helpful response in English.
-                The response should:
-                - Greet the user warmly
-                - Explain why these services match their request
-                - Provide helpful suggestions or advice
-                - Encourage downloading the TripC app for details
-                
-                Keep it concise, natural, and under 100 words.
-                """
+User search: "{query}"
+Service type: {service_type_en}
+
+Matching services:
+{self._format_services_for_prompt(services, language)}
+
+Respond in English, naturally, friendly, under 80 words. Introduce {service_type_en} and remind user to download TripC app for details."""
             
             # Generate response using LLM
             llm_response = self.llm_client.generate_response(prompt, max_tokens=150)
@@ -157,38 +200,24 @@ class ServiceAgent:
             # Create context-aware prompt for LLM
             if language == "vi":
                 location = city if city else "Đà Nẵng"
-                prompt = f"""
-                Bạn là một trợ lý du lịch thông minh của TripC. Người dùng đang tìm kiếm nhà hàng tại {location}.
+                prompt = f"""Bạn là TripC.AI, trợ lý du lịch thông minh.
 
-                Dưới đây là danh sách các nhà hàng tuyệt vời:
-                {self._format_services_for_prompt(services, language)}
-                
-                Hãy tạo một câu trả lời thông minh, thân thiện và hữu ích bằng tiếng Việt.
-                Câu trả lời nên:
-                - Chào hỏi người dùng một cách thân thiện
-                - Giới thiệu về ẩm thực tại {location}
-                - Đưa ra gợi ý về việc chọn nhà hàng
-                - Khuyến khích tải app TripC để xem chi tiết và đặt bàn
-                
-                Trả lời ngắn gọn, tự nhiên và không quá 100 từ.
-                """
+Người dùng tìm kiếm nhà hàng tại {location}
+
+Nhà hàng nổi bật:
+{self._format_services_for_prompt(services, language)}
+
+Trả lời bằng tiếng Việt, tự nhiên, thân thiện, dưới 80 từ. Giới thiệu ẩm thực {location} và nhắc tải app TripC để đặt bàn."""
             else:
                 location = city if city else "Da Nang"
-                prompt = f"""
-                You are an intelligent travel assistant from TripC. The user is looking for restaurants in {location}.
+                prompt = f"""You are TripC.AI, an intelligent travel assistant.
 
-                Here are some great restaurants:
-                {self._format_services_for_prompt(services, language)}
-                
-                Please create an intelligent, friendly, and helpful response in English.
-                The response should:
-                - Greet the user warmly
-                - Introduce the culinary scene in {location}
-                - Provide suggestions for choosing restaurants
-                - Encourage downloading the TripC app for details and booking
-                
-                Keep it concise, natural, and under 100 words.
-                """
+User looking for restaurants in {location}
+
+Featured restaurants:
+{self._format_services_for_prompt(services, language)}
+
+Respond in English, naturally, friendly, under 80 words. Introduce {location} cuisine and remind to download TripC app for booking."""
             
             # Generate response using LLM
             llm_response = self.llm_client.generate_response(prompt, max_tokens=150)
@@ -232,16 +261,28 @@ class ServiceAgent:
     
     def _format_services_for_prompt(self, services: List[Service], language: str) -> str:
         """Format services list for LLM prompt"""
-        if language == "vi":
-            service_list = []
-            for i, service in enumerate(services[:5], 1):  # Limit to first 5 for prompt
-                service_list.append(f"{i}. {service.name} - {service.description[:100]}...")
-            return "\n".join(service_list)
-        else:
-            service_list = []
-            for i, service in enumerate(services[:5], 1):
-                service_list.append(f"{i}. {service.name} - {service.description[:100]}...")
-            return "\n".join(service_list)
+        service_list = []
+        for i, service in enumerate(services[:3], 1):  # Limit to first 3 for cleaner prompt
+            name = service.name
+            description = service.description[:80] if service.description else ""
+            address = service.address if service.address else ""
+            
+            if language == "vi":
+                service_info = f"{i}. {name}"
+                if description:
+                    service_info += f" - {description}"
+                if address:
+                    service_info += f" ({address})"
+            else:
+                service_info = f"{i}. {name}"
+                if description:
+                    service_info += f" - {description}"
+                if address:
+                    service_info += f" ({address})"
+            
+            service_list.append(service_info)
+        
+        return "\n".join(service_list)
     
     def _generate_service_suggestions(self, platform_context: PlatformContext, 
                                     service_type: str) -> List[Suggestion]:

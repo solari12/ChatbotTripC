@@ -12,6 +12,7 @@ from ..models.schemas import ChatRequest, ChatResponse, QnAResponse
 from ..agents.qna_agent import QnAAgent
 from ..agents.service_agent import ServiceAgent
 from ..core.cta_engine import CTAEngine
+from ..core.prompt_manager import PromptManager
 from ..llm.open_client import OpenAIClient
 
 
@@ -41,6 +42,7 @@ class LangGraphWorkflow:
         self.service_agent = service_agent
         self.llm_client = llm_client or OpenAIClient()  # Auto-create if not provided
         self.cta_engine = CTAEngine()
+        self.prompt_manager = PromptManager()
         self.workflow = self._build_workflow()
     
     def _build_workflow(self) -> StateGraph:
@@ -109,31 +111,94 @@ class LangGraphWorkflow:
         return "continue"
     
     async def _classify_intent(self, state: WorkflowState) -> WorkflowState:
-        """Classify user intent"""
-        message = state["message"].lower()
+        """Classify user intent using LLM for intelligent classification"""
+        try:
+            message = state["message"]
+            language = state.get("language", "vi")
+            
+            # Get prompts from prompt manager
+            system_prompt = self.prompt_manager.get_intent_system_prompt(language)
+            user_prompt_template = self.prompt_manager.get_intent_user_template(language)
+            
+            if not system_prompt or not user_prompt_template:
+                # Fallback to keyword-based classification if prompts not loaded
+                print("⚠️ Prompts not loaded, using keyword classification")
+                state["intent"] = self._fallback_keyword_classification(message)
+                return state
+            
+            # Format user prompt with actual message
+            user_prompt = user_prompt_template.format(message=message)
+            
+            # Use LLM to classify intent
+            if self.llm_client:
+                try:
+                    # Get LLM response for intent classification
+                    llm_response = await self.llm_client.chat_completion(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        model="gpt-3.5-turbo",  # Use appropriate model
+                        temperature=0.1,  # Low temperature for consistent classification
+                        max_tokens=10
+                    )
+                    
+                    # Extract intent from LLM response
+                    intent_response = llm_response.strip().lower()
+                    
+                    # Validate and map intent
+                    if "service" in intent_response:
+                        state["intent"] = "service"
+                    elif "booking" in intent_response:
+                        state["intent"] = "booking"
+                    elif "qna" in intent_response:
+                        state["intent"] = "qna"
+                    else:
+                        # Fallback to qna if LLM response is unclear
+                        state["intent"] = "qna"
+                        
+                except Exception as e:
+                    # Fallback to keyword-based classification if LLM fails
+                    print(f"❌ LLM intent classification failed: {e}, falling back to keywords")
+                    state["intent"] = self._fallback_keyword_classification(message)
+            else:
+                # Fallback to keyword-based classification if no LLM client
+                state["intent"] = self._fallback_keyword_classification(message)
+            
+            return state
+            
+        except Exception as e:
+            # Error handling - default to qna
+            print(f"❌ Intent classification error: {e}")
+            state["intent"] = "qna"
+            return state
+    
+    def _fallback_keyword_classification(self, message: str) -> str:
+        """Fallback keyword-based intent classification when LLM is unavailable"""
+        message_lower = message.lower()
         
         # Service intent keywords
         service_keywords = [
             "nhà hàng", "restaurant", "quán ăn", "địa điểm", "place",
-            "tìm", "search", "khám phá", "explore", "địa chỉ", "address"
+            "tìm", "search", "khám phá", "explore", "địa chỉ", "address",
+            "ở đâu", "where", "gần đây", "nearby", "khuyến mãi", "promotion"
         ]
         
         # Booking intent keywords
         booking_keywords = [
             "đặt", "book", "reserve", "đặt bàn", "booking", "reservation",
-            "đặt chỗ", "đặt tour", "book tour", "đặt vé", "book ticket"
+            "đặt chỗ", "đặt tour", "book tour", "đặt vé", "book ticket",
+            "đặt phòng", "book room", "thanh toán", "payment", "giá", "price"
         ]
         
         # Check for service intent
-        if any(keyword in message for keyword in service_keywords):
-            state["intent"] = "service"
+        if any(keyword in message_lower for keyword in service_keywords):
+            return "service"
         # Check for booking intent
-        elif any(keyword in message for keyword in booking_keywords):
-            state["intent"] = "booking"
+        elif any(keyword in message_lower for keyword in booking_keywords):
+            return "booking"
         else:
-            state["intent"] = "qna"
-        
-        return state
+            return "qna"
     
     async def _route_to_agent(self, state: WorkflowState) -> WorkflowState:
         """Route request to appropriate agent"""
@@ -343,3 +408,19 @@ class LangGraphWorkflow:
                 }
             ]
         }
+    
+    def reload_prompts(self):
+        """Reload prompts from file (useful for development)"""
+        return self.prompt_manager.reload_prompts()
+    
+    def list_available_prompts(self) -> list:
+        """List all available prompt keys"""
+        return self.prompt_manager.list_available_prompts()
+    
+    def validate_prompts(self) -> Dict[str, bool]:
+        """Validate that all required prompts are loaded"""
+        return self.prompt_manager.validate_prompts()
+    
+    def get_prompt(self, key: str) -> str:
+        """Get prompt by key"""
+        return self.prompt_manager.get_prompt(key)

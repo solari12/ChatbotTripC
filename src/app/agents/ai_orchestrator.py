@@ -1,8 +1,15 @@
+#!/usr/bin/env python3
+"""
+AI Agent Orchestrator - LangGraph-based implementation
+Maintains backward compatibility while using modern LangGraph workflow
+"""
+
 from typing import Union, Optional
 from ..models.schemas import ChatRequest, ChatResponse, QnAResponse, ServiceResponse
 from ..models.platform_models import PlatformType, PlatformContext
 from ..core.platform_context import PlatformContextHandler
 from ..core.cta_engine import CTAEngine
+from ..core.langgraph_workflow import LangGraphWorkflow
 from .qna_agent import QnAAgent
 from .service_agent import ServiceAgent
 from ..llm.open_client import OpenAIClient
@@ -12,16 +19,21 @@ logger = logging.getLogger(__name__)
 
 
 class AIAgentOrchestrator:
-    """Orchestrates AI agents with platform-aware routing"""
+    """Orchestrates AI agents with platform-aware routing using LangGraph workflow"""
     
     def __init__(self, qna_agent: QnAAgent, service_agent: ServiceAgent, llm_client: OpenAIClient = None):
         self.qna_agent = qna_agent
         self.service_agent = service_agent
         self.llm_client = llm_client or OpenAIClient()  # Auto-create if not provided
+        
+        # Initialize LangGraph workflow
+        self.langgraph_workflow = LangGraphWorkflow(qna_agent, service_agent, llm_client)
+        
+        # Keep legacy components for backward compatibility
         self.platform_handler = PlatformContextHandler()
         self.cta_engine = CTAEngine()
         
-        # Intent classification keywords
+        # Legacy intent classification keywords (kept for reference)
         self.service_intents = [
             "nhà hàng", "quán ăn", "đồ ăn", "ẩm thực", "restaurant", "food", "dining",
             "tour", "du lịch", "tham quan", "điểm đến", "attraction", "sightseeing",
@@ -35,12 +47,24 @@ class AIAgentOrchestrator:
         ]
     
     async def process_request(self, request: ChatRequest) -> ChatResponse:
-        """Process chat request with platform-aware routing"""
+        """Process chat request with LangGraph workflow (main interface)"""
+        try:
+            # Use LangGraph workflow for processing
+            response = await self.langgraph_workflow.process_request(request)
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error processing request with LangGraph workflow: {e}")
+            # Fallback to legacy processing if LangGraph fails
+            return await self._legacy_process_request(request)
+    
+    async def _legacy_process_request(self, request: ChatRequest) -> ChatResponse:
+        """Legacy processing method as fallback"""
         try:
             # Create platform context
             platform_context = self.platform_handler.create_context(request)
             
-            # Classify intent
+            # Classify intent using legacy method
             intent = self._classify_intent(request.message)
             
             # Route to appropriate agent
@@ -57,11 +81,11 @@ class AIAgentOrchestrator:
             return response
             
         except Exception as e:
-            logger.error(f"Error processing request: {e}")
+            logger.error(f"Error in legacy processing: {e}")
             return await self._get_error_response(request)
     
     def _classify_intent(self, message: str) -> str:
-        """Classify user intent from message"""
+        """Legacy intent classification using keywords"""
         message_lower = message.lower()
         
         # Check for service intent
@@ -245,3 +269,18 @@ class AIAgentOrchestrator:
             sources=sources,
             suggestions=suggestions
         )
+    
+    # Additional methods for LangGraph integration
+    def get_workflow_graph(self):
+        """Get LangGraph workflow visualization"""
+        return self.langgraph_workflow.get_workflow_graph()
+    
+    def get_workflow_stats(self):
+        """Get workflow statistics"""
+        return {
+            "workflow_type": "LangGraph",
+            "nodes": 5,
+            "has_error_handling": True,
+            "has_conditional_edges": True,
+            "legacy_fallback": True
+        }

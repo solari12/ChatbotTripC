@@ -19,12 +19,12 @@ from .vector.pgvector_store import PgVectorStore
 from .services.tripc_api import TripCAPIClient
 from .agents.qna_agent import QnAAgent
 from .agents.service_agent import ServiceAgent
-from .core.langgraph_workflow import LangGraphWorkflow
+from .agents.ai_orchestrator import AIAgentOrchestrator
 from .services.email_service import EmailService
 from .llm.open_client import OpenAIClient
 
 # Global variables for services
-langgraph_workflow: LangGraphWorkflow = None
+ai_orchestrator: AIAgentOrchestrator = None
 email_service: EmailService = None
 
 @asynccontextmanager
@@ -56,9 +56,9 @@ async def lifespan(app: FastAPI):
     service_agent = ServiceAgent(tripc_client)  # Auto-creates LLM client from .env
     print("✅ AI agents initialized")
     
-    # Initialize LangGraph workflow
-    langgraph_workflow = LangGraphWorkflow(qna_agent, service_agent)  # Auto-creates LLM client from .env
-    print("✅ LangGraph workflow initialized")
+    # Initialize AI Agent Orchestrator (LangGraph-based)
+    ai_orchestrator = AIAgentOrchestrator(qna_agent, service_agent, llm_client)
+    print("✅ AI Agent Orchestrator (LangGraph-based) initialized")
     
     # Initialize email service
     email_service = EmailService()
@@ -100,9 +100,10 @@ async def root():
             "user_info": "/api/v1/user/collect-info",
             "status": "/api/v1/status",
             "vector_stats": "/api/v1/vector/stats",
+            "workflow_graph": "/api/v1/workflow/graph",
             "docs": "/docs"
         },
-        "architecture": "LangGraph-based workflow with platform-aware routing"
+        "architecture": "AI Agent Orchestrator with LangGraph workflow"
     }
 
 @app.get("/health")
@@ -120,14 +121,14 @@ async def chatbot_response(request: ChatRequest):
     Main chatbot endpoint with platform-aware processing using LangGraph workflow
     """
     try:
-        if not langgraph_workflow:
+        if not ai_orchestrator:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Chatbot service not initialized"
             )
         
-        # Process request through LangGraph workflow
-        response = await langgraph_workflow.process_request(request)
+        # Process request through AI Agent Orchestrator (LangGraph-based)
+        response = await ai_orchestrator.process_request(request)
         
         return response
         
@@ -147,6 +148,32 @@ async def chatbot_response(request: ChatRequest):
                     "data": {}
                 }
             ]
+        )
+
+
+@app.get("/api/v1/workflow/graph")
+async def get_workflow_graph():
+    """Get LangGraph workflow visualization"""
+    try:
+        if not ai_orchestrator:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="AI Agent Orchestrator not initialized"
+            )
+        
+        return {
+            "workflow": ai_orchestrator.get_workflow_graph(),
+            "stats": ai_orchestrator.get_workflow_stats(),
+            "description": "AI Agent Orchestrator with LangGraph workflow backend"
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to get workflow graph",
+                "detail": str(e)
+            }
         )
 
 @app.post("/api/v1/user/collect-info", response_model=UserInfoResponse)

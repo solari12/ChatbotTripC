@@ -101,8 +101,11 @@ class EmailService:
                 <p><strong>Tên khách hàng:</strong> {user_info.name}</p>
                 <p><strong>Email:</strong> {user_info.email}</p>
                 <p><strong>Số điện thoại:</strong> {user_info.phone}</p>
+                {f"<p><strong>Dịch vụ quan tâm:</strong> {user_info.service_interest}</p>" if getattr(user_info, 'service_interest', None) else ''}
+                {f"<p><strong>Địa điểm:</strong> {user_info.location}</p>" if getattr(user_info, 'location', None) else ''}
                 <p><strong>Nội dung yêu cầu:</strong></p>
-                <p>{user_info.message}</p>
+                <p>{user_info.message or ''}</p>
+                {f"<p><strong>User ID:</strong> {user_info.user_id}</p>" if getattr(user_info, 'user_id', None) else ''}
                 <p><strong>Platform:</strong> {user_info.platform.value}</p>
                 <p><strong>Device:</strong> {user_info.device.value}</p>
                 <p><strong>Ngôn ngữ:</strong> {user_info.language.value}</p>
@@ -119,8 +122,11 @@ class EmailService:
                 <p><strong>Customer Name:</strong> {user_info.name}</p>
                 <p><strong>Email:</strong> {user_info.email}</p>
                 <p><strong>Phone:</strong> {user_info.phone}</p>
+                {f"<p><strong>Service Interest:</strong> {user_info.service_interest}</p>" if getattr(user_info, 'service_interest', None) else ''}
+                {f"<p><strong>Location:</strong> {user_info.location}</p>" if getattr(user_info, 'location', None) else ''}
                 <p><strong>Request Details:</strong></p>
-                <p>{user_info.message}</p>
+                <p>{user_info.message or ''}</p>
+                {f"<p><strong>User ID:</strong> {user_info.user_id}</p>" if getattr(user_info, 'user_id', None) else ''}
                 <p><strong>Platform:</strong> {user_info.platform.value}</p>
                 <p><strong>Device:</strong> {user_info.device.value}</p>
                 <p><strong>Language:</strong> {user_info.language.value}</p>
@@ -144,7 +150,9 @@ class EmailService:
                 <p>Xin chào {user_info.name},</p>
                 <p>Cảm ơn bạn đã gửi yêu cầu đặt chỗ qua TripC.AI Chatbot.</p>
                 <p><strong>Chi tiết yêu cầu:</strong></p>
-                <p>{user_info.message}</p>
+                <p>{user_info.message or ''}</p>
+                {f"<p><strong>Dịch vụ quan tâm:</strong> {user_info.service_interest}</p>" if getattr(user_info, 'service_interest', None) else ''}
+                {f"<p><strong>Địa điểm:</strong> {user_info.location}</p>" if getattr(user_info, 'location', None) else ''}
                 <p>Đội ngũ của chúng tôi sẽ liên hệ với bạn trong thời gian sớm nhất để xác nhận và hoàn tất việc đặt chỗ.</p>
                 <p>Nếu bạn có bất kỳ câu hỏi nào, vui lòng liên hệ với chúng tôi qua email: {self.booking_email}</p>
                 <br>
@@ -163,7 +171,9 @@ class EmailService:
                 <p>Hello {user_info.name},</p>
                 <p>Thank you for submitting your booking request through TripC.AI Chatbot.</p>
                 <p><strong>Request Details:</strong></p>
-                <p>{user_info.message}</p>
+                <p>{user_info.message or ''}</p>
+                {f"<p><strong>Service Interest:</strong> {user_info.service_interest}</p>" if getattr(user_info, 'service_interest', None) else ''}
+                {f"<p><strong>Location:</strong> {user_info.location}</p>" if getattr(user_info, 'location', None) else ''}
                 <p>Our team will contact you as soon as possible to confirm and complete your booking.</p>
                 <p>If you have any questions, please contact us at: {self.booking_email}</p>
                 <br>

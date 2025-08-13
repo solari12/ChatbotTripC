@@ -261,19 +261,32 @@ Return 1 word: service/booking/qna"""
                 state["response"] = response.dict()
                 
             elif intent == "booking":
-                # For booking, we'll provide a response with suggestions
-                # but the actual booking happens via separate endpoint
+                # For booking, provide clear, localized guidance and CTA to collect info via separate endpoint
+                lang = platform_context.language.value if platform_context and platform_context.language else "vi"
+                if lang == "vi":
+                    answer_text = (
+                        "Tôi hiểu bạn muốn đặt chỗ. Vui lòng để lại họ tên, email, số điện thoại và yêu cầu chi tiết. "
+                        "Bạn có thể bấm \"Đặt bàn ngay\" để nhập thông tin."
+                    )
+                    suggestions = [
+                        {"label": "Đặt bàn ngay", "detail": "Để lại thông tin để nhận hỗ trợ đặt bàn", "action": "collect_user_info"},
+                        {"label": "Xem thêm nhà hàng", "detail": "Gợi ý thêm địa điểm phù hợp", "action": "show_more_services"}
+                    ]
+                else:
+                    answer_text = (
+                        "I understand you want to make a reservation. Please leave your full name, email, phone number and details. "
+                        "Tap \"Book now\" to enter your information."
+                    )
+                    suggestions = [
+                        {"label": "Book now", "detail": "Leave your info for reservation support", "action": "collect_user_info"},
+                        {"label": "See more restaurants", "detail": "More matching places", "action": "show_more_services"}
+                    ]
+
                 response = QnAResponse(
                     type="QnA",
-                    answerAI="Tôi hiểu bạn muốn đặt chỗ. Vui lòng cung cấp thông tin chi tiết để tôi có thể hỗ trợ bạn tốt nhất.",
+                    answerAI=answer_text,
                     sources=[],
-                    suggestions=[
-                        {
-                            "label": "Cung cấp thông tin đặt chỗ",
-                            "action": "collect_user_info",
-                            "data": {"intent": "booking"}
-                        }
-                    ]
+                    suggestions=suggestions
                 )
                 state["response"] = response.dict()
                 

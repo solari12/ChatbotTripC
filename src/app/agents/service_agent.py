@@ -632,10 +632,8 @@ Only extract information present in the query. Use null if not mentioned."""
     async def _call_llm_for_analysis(self, prompt: str) -> str:
         """Call LLM for query analysis"""
         try:
-            # Use OpenAI client for analysis
-            from app.llm.open_client import OpenAIClient
-            
-            llm_client = OpenAIClient()
+            # Use existing LLM client if available; else create one
+            llm_client = self.llm_client or OpenAIClient()
             if not llm_client.is_configured():
                 # Return simple fallback JSON if no LLM available
                 return '{"location": null, "cuisine_type": null, "keyword": null, "price_range": null, "rating_preference": null, "atmosphere": null, "meal_time": null, "special_features": null}'

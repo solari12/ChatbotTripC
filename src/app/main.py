@@ -171,15 +171,17 @@ async def collect_user_info(request: UserInfoRequest):
         confirmation_sent = await email_service.send_confirmation_email(request)
         
         # Prepare response message based on language
-        if request.language == "vi":
-            message = f"Cảm ơn bạn đã gửi yêu cầu đặt chỗ! Mã đặt chỗ của bạn là: {booking_reference}. Chúng tôi sẽ liên hệ với bạn trong thời gian sớm nhất."
+        if getattr(request.language, "value", request.language) == "vi":
+            message = f"Thông tin của bạn đã được ghi nhận. Mã tham chiếu: {booking_reference}. Chúng tôi sẽ liên hệ lại trong thời gian sớm nhất."
         else:
-            message = f"Thank you for your booking request! Your booking reference is: {booking_reference}. We will contact you as soon as possible."
+            message = f"Your information has been recorded. Reference: {booking_reference}. We will contact you as soon as possible."
         
         return UserInfoResponse(
-            success=True,
+            status="success",
             message=message,
-            booking_reference=booking_reference
+            action="info_collected",
+            booking_reference=booking_reference,
+            success=True
         )
         
     except Exception as e:
@@ -187,15 +189,17 @@ async def collect_user_info(request: UserInfoRequest):
         print(f"Error in user info collection: {str(e)}")
         
         # Return error response
-        if request.language == "vi":
-            error_message = "Xin lỗi, đã xảy ra lỗi khi xử lý yêu cầu của bạn. Vui lòng thử lại sau."
+        if getattr(request.language, "value", request.language) == "vi":
+            error_message = "Có lỗi xảy ra. Vui lòng thử lại sau hoặc liên hệ hotline: 1900 1234"
         else:
-            error_message = "Sorry, an error occurred while processing your request. Please try again later."
+            error_message = "An error occurred. Please try again later or contact our hotline."
         
         return UserInfoResponse(
-            success=False,
+            status="error",
             message=error_message,
-            booking_reference=None
+            action="try_again",
+            booking_reference=None,
+            success=False
         )
 
 @app.get("/api/v1/status")

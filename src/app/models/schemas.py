@@ -101,10 +101,13 @@ class UserInfoRequest(BaseModel):
     name: str = Field(..., description="User's full name")
     email: str = Field(..., description="User's email address")
     phone: str = Field(..., description="User's phone number")
-    message: str = Field(..., description="Booking inquiry message")
-    platform: PlatformType = Field(..., description="Platform context")
-    device: DeviceType = Field(..., description="Device context")
-    language: LanguageType = Field(..., description="Language context")
+    message: Optional[str] = Field(None, description="Booking inquiry message")
+    service_interest: Optional[str] = Field(None, description="Service the user is interested in")
+    location: Optional[str] = Field(None, description="User's preferred location or city")
+    user_id: Optional[str] = Field(None, description="User ID from session")
+    platform: PlatformType = Field(PlatformType.WEB_BROWSER, description="Platform context")
+    device: DeviceType = Field(DeviceType.ANDROID, description="Device context")
+    language: LanguageType = Field(LanguageType.VIETNAMESE, description="Language context")
     
     class Config:
         json_schema_extra = {
@@ -112,7 +115,9 @@ class UserInfoRequest(BaseModel):
                 "name": "Nguyễn Văn A",
                 "email": "user@example.com",
                 "phone": "+84901234567",
-                "message": "Tôi muốn đặt bàn tại nhà hàng Bông",
+                "service_interest": "Nhà hàng hải sản",
+                "message": "Muốn đặt bàn cho 4 người vào tối mai",
+                "location": "Da Nang",
                 "platform": "web_browser",
                 "device": "android",
                 "language": "vi"
@@ -122,6 +127,9 @@ class UserInfoRequest(BaseModel):
 
 class UserInfoResponse(BaseModel):
     """Response after collecting user info"""
-    success: bool
+    status: str
     message: str
+    action: Optional[str] = None
     booking_reference: Optional[str] = None
+    # Backward compatibility
+    success: Optional[bool] = None

@@ -30,7 +30,7 @@ email_service: EmailService = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
-    global langgraph_workflow, email_service
+    global ai_orchestrator, email_service
     
     # Initialize services
     print("🚀 Initializing TripC.AI Chatbot API...")
@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
     print("✅ AI agents initialized")
     
     # Initialize AI Agent Orchestrator (LangGraph-based)
-    ai_orchestrator = AIAgentOrchestrator(qna_agent, service_agent, llm_client)
+    ai_orchestrator = AIAgentOrchestrator(qna_agent, service_agent)  # Auto-creates LLM client from .env
     print("✅ AI Agent Orchestrator (LangGraph-based) initialized")
     
     # Initialize email service
@@ -100,10 +100,9 @@ async def root():
             "user_info": "/api/v1/user/collect-info",
             "status": "/api/v1/status",
             "vector_stats": "/api/v1/vector/stats",
-            "workflow_graph": "/api/v1/workflow/graph",
             "docs": "/docs"
         },
-        "architecture": "AI Agent Orchestrator with LangGraph workflow"
+        "architecture": "LangGraph-based workflow with platform-aware routing"
     }
 
 @app.get("/health")
@@ -148,32 +147,6 @@ async def chatbot_response(request: ChatRequest):
                     "data": {}
                 }
             ]
-        )
-
-
-@app.get("/api/v1/workflow/graph")
-async def get_workflow_graph():
-    """Get LangGraph workflow visualization"""
-    try:
-        if not ai_orchestrator:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="AI Agent Orchestrator not initialized"
-            )
-        
-        return {
-            "workflow": ai_orchestrator.get_workflow_graph(),
-            "stats": ai_orchestrator.get_workflow_stats(),
-            "description": "AI Agent Orchestrator with LangGraph workflow backend"
-        }
-        
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "Failed to get workflow graph",
-                "detail": str(e)
-            }
         )
 
 @app.post("/api/v1/user/collect-info", response_model=UserInfoResponse)

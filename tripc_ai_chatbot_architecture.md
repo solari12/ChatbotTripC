@@ -23,9 +23,10 @@ flowchart TD
     end
 
     subgraph TripCEcosystem["TripC API Integration"]
-        API[TripC API<br/>api.tripc.ai]
-        REST[Restaurant Services]
-        TOUR[Tour Services]
+        API[TripC API<br/>tripc-api.allyai.ai (dev)<br/>api.tripc.ai (prod)]
+        REST[Restaurant Services<br/>supplier_type_slug=am-thuc]
+        HOTEL[Hotel Services<br/>supplier_type_slug=luu-tru]
+        CULINARY[Culinary Passport<br/>Hộ chiếu ẩm thực Đà Nẵng]
         BOOK[Booking Services]
     end
 
@@ -48,7 +49,7 @@ flowchart TD
     PC --> C
     C --> D1 --> V & P
     C --> D2 --> API
-    API --> REST & TOUR & BOOK
+    API --> REST & HOTEL & CULINARY & BOOK
     
     C --> CTA
     CTA -->|Web Users| STORE

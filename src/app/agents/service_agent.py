@@ -21,10 +21,9 @@ class ServiceAgent:
                 "nhà hàng", "quán ăn", "đồ ăn", "ẩm thực", "restaurant", "food", "dining",
                 "ăn", "bữa", "món", "nấu", "chế biến", "thực phẩm", "đồ uống", "cafe", "bar"
             ],
-            "tour": [
-                "tour", "du lịch", "tham quan", "điểm đến", "attraction", "sightseeing",
-                "thăm", "khám phá", "địa điểm", "danh lam", "thắng cảnh", "di tích", "bảo tàng",
-                "công viên", "bãi biển", "núi", "sông", "hồ", "đảo", "chùa", "nhà thờ"
+            "culinary_passport": [
+                "hộ chiếu ẩm thực", "culinary passport", "hộ chiếu", "passport", 
+                "ẩm thực đà nẵng", "da nang culinary", "đặc sản đà nẵng"
             ],
             "hotel": [
                 "khách sạn", "nơi ở", "accommodation", "hotel", "lodging", "resort",
@@ -42,76 +41,85 @@ class ServiceAgent:
             if detected_type:
                 service_type = detected_type
             
-            # Extract search criteria from query
-            search_criteria = self._extract_search_criteria(query)
+            # Use LLM to extract search parameters intelligently
+            search_params = await self._extract_search_params_with_llm(query, platform_context)
             
-            # Get services from TripC API based on service type with search criteria
+            # Get services from TripC API based on service type with LLM-extracted parameters
             if service_type == "restaurant":
-                # First try to get restaurants by location (more reliable)
-                if search_criteria.get("location"):
-                    # Get more pages to find specific cuisine
+                # Use general restaurants API with am-thuc filter and smart parameters
+                # Get more pages if we need variety for filtering
+                llm_context = search_params.get("llm_context", {})
+                needs_variety = any(llm_context.get(key) for key in ["atmosphere", "price_range", "special_features"])
+                
+                if needs_variety:
+                    # Get from multiple pages for better variety
                     all_services = []
-                    for p in range(1, 4):  # Get first 3 pages
+                    for page in [1, 2, 3]:
                         page_services = await self.tripc_client.get_restaurants(
-                            page=p, 
-                            page_size=20,
-                            city=search_criteria.get("location")
+                            page=page, 
+                            page_size=10,
+                            city=search_params.get("city"),
+                            keyword=search_params.get("keyword"),
+                            supplier_type_slug="am-thuc"
                         )
                         all_services.extend(page_services)
-                        if len(page_services) < 20:  # No more results
+                        if len(all_services) >= 30:  # Enough for filtering
                             break
-                    
                     services = all_services
-                    
-                    # If cuisine is specified, filter the results
-                    if search_criteria.get("cuisine") and services:
-                        cuisine_filter = search_criteria.get("cuisine").lower()
-                        filtered_services = []
-                        for service in services:
-                            # Check if cuisine matches in name, description, or product types
-                            service_text = f"{service.name} {service.description} {service.productTypes}".lower()
-                            
-                            # More precise matching for specific cuisines
-                            if cuisine_filter == "nhật bản" or cuisine_filter == "japanese":
-                                # Look for Japanese-specific keywords
-                                japanese_keywords = ["nhật", "japanese", "sushi", "sashimi", "tempura", "ramen", "udon"]
-                                if any(keyword in service_text for keyword in japanese_keywords):
-                                    filtered_services.append(service)
-                            elif cuisine_filter == "italian":
-                                # Look for Italian-specific keywords
-                                italian_keywords = ["italian", "italy", "pizza", "pasta", "spaghetti", "risotto", "tiramisu"]
-                                if any(keyword in service_text for keyword in italian_keywords):
-                                    filtered_services.append(service)
-                            elif cuisine_filter == "việt nam" or cuisine_filter == "vietnamese":
-                                # Look for Vietnamese-specific keywords
-                                vietnamese_keywords = ["việt", "vietnamese", "phở", "bún", "bánh", "mì quảng", "cao lầu"]
-                                if any(keyword in service_text for keyword in vietnamese_keywords):
-                                    filtered_services.append(service)
-                            else:
-                                # General matching for other cuisines
-                                if cuisine_filter in service_text:
-                                    filtered_services.append(service)
-                        
-                        services = filtered_services
                 else:
-                    # Fallback to keyword search
+                    # Standard single page request
                     services = await self.tripc_client.get_restaurants(
-                        page=page, 
+                        page=1, 
                         page_size=10,
-                        keyword=search_criteria.get("cuisine")
+                        city=search_params.get("city"),
+                        keyword=search_params.get("keyword"),
+                        supplier_type_slug="am-thuc"
                     )
-            elif service_type == "tour":
-                # For now, return empty list as tour endpoint doesn't exist
-                services = []
+                
+                # Apply LLM context filtering
+                services = self._filter_services_by_llm_context(services, llm_context)
+                
+                # Limit to 5 best matches
+                services = services[:5]
+            elif service_type == "culinary_passport":
+                # Use culinary passport suppliers API with LLM parameters
+                services = await self.tripc_client.get_culinary_passport_suppliers(
+                    page=1,
+                    page_size=20  # Get more for better filtering
+                )
+                # Apply LLM context filtering
+                services = self._filter_services_by_llm_context(services, search_params.get("llm_context", {}))
+                
+                # Filter by location if specified
+                if search_params.get("city") and services:
+                    location_filter = search_params.get("city").lower()
+                    services = [s for s in services if location_filter in (s.city or "").lower() or location_filter in (s.address or "").lower()]
+                
+                # Limit to 5 for response
+                services = services[:5]
             elif service_type == "hotel":
-                # For now, return empty list as hotel endpoint doesn't exist
-                services = []
+                # Use hotels API with luu-tru filter and LLM parameters
+                services = await self.tripc_client.get_hotels(
+                    page=1,
+                    page_size=20  # Get more for better filtering
+                )
+                # Apply LLM context filtering
+                services = self._filter_services_by_llm_context(services, search_params.get("llm_context", {}))
+                
+                # Filter by location if specified
+                if search_params.get("city") and services:
+                    location_filter = search_params.get("city").lower()
+                    services = [s for s in services if location_filter in (s.city or "").lower() or location_filter in (s.address or "").lower()]
+                
+                # Limit to 5 for response
+                services = services[:5]
             else:
-                # For other service types, try restaurants as fallback with basic search
+                # For other service types, fallback to restaurants
                 services = await self.tripc_client.get_restaurants(
-                    page=page, 
-                    page_size=10,
-                    keyword=search_criteria.get("cuisine") or search_criteria.get("location")
+                    page=1, 
+                    page_size=5,
+                    keyword=search_params.get("keyword"),
+                    city=search_params.get("city")
                 )
             
             if not services:
@@ -119,7 +127,7 @@ class ServiceAgent:
             
             # Generate intelligent response using LLM
             answer_ai = await self._generate_llm_response(query, services, service_type, platform_context)
-            sources = self.tripc_client.get_service_sources()
+            sources = self.tripc_client.get_service_sources(service_type)
             suggestions = self._generate_service_suggestions(platform_context, service_type)
             
             return ServiceResponse(
@@ -150,7 +158,7 @@ class ServiceAgent:
             
             # Generate intelligent response using LLM
             answer_ai = await self._generate_restaurant_llm_response(services, platform_context, city)
-            sources = self.tripc_client.get_service_sources()
+            sources = self.tripc_client.get_service_sources("restaurant")
             suggestions = self._generate_service_suggestions(platform_context, "restaurant")
             
             return ServiceResponse(
@@ -192,7 +200,7 @@ class ServiceAgent:
         """Convert service type to Vietnamese"""
         type_mapping = {
             "restaurant": "nhà hàng",
-            "tour": "điểm du lịch",
+            "culinary_passport": "nhà hàng trong Hộ chiếu ẩm thực",
             "hotel": "khách sạn",
             "attraction": "điểm tham quan",
             "activity": "hoạt động",
@@ -204,7 +212,7 @@ class ServiceAgent:
         """Convert service type to English"""
         type_mapping = {
             "restaurant": "restaurants",
-            "tour": "tourist attractions",
+            "culinary_passport": "culinary passport restaurants",
             "hotel": "hotels",
             "attraction": "attractions",
             "activity": "activities",
@@ -424,7 +432,7 @@ Respond in English, naturally, friendly, under 80 words. Introduce {location} cu
         else:
             answer = f"Sorry, I couldn't find any {service_type} services that match your request."
         
-        sources = self.tripc_client.get_service_sources()
+        sources = self.tripc_client.get_service_sources(service_type)
         suggestions = [
             Suggestion(
                 label="Thử tìm kiếm khác" if language == "vi" else "Try different search",
@@ -451,7 +459,7 @@ Respond in English, naturally, friendly, under 80 words. Introduce {location} cu
         else:
             answer = f"Sorry, an error occurred while searching for {service_type} services. Please try again later."
         
-        sources = self.tripc_client.get_service_sources()
+        sources = self.tripc_client.get_service_sources(service_type)
         suggestions = [
             Suggestion(
                 label="Thử lại" if language == "vi" else "Try again",
@@ -561,4 +569,311 @@ Respond in English, naturally, friendly, under 80 words. Introduce {location} cu
             criteria["atmosphere"] = "romantic"
         
         return criteria
+    
+    async def _extract_search_params_with_llm(self, query: str, platform_context: PlatformContext) -> Dict[str, Any]:
+        """Use LLM to intelligently extract search parameters from user query"""
+        try:
+            language = platform_context.language.value
+            
+            if language == "vi":
+                prompt = f"""Bạn là trợ lý phân tích câu hỏi về tìm kiếm nhà hàng.
+
+Câu hỏi của người dùng: "{query}"
+
+Hãy phân tích và trích xuất các thông tin sau (trả về JSON):
+{{
+  "location": "tên thành phố (ví dụ: đà nẵng, hội an, hà nội)",
+  "cuisine_type": "loại ẩm thực (ví dụ: hải sản, việt nam, nhật bản, hàn quốc, ý, pháp, trung quốc, thái, chay)",
+  "keyword": "từ khóa chính để tìm kiếm (tên món ăn, tên nhà hàng, đặc điểm)",
+  "price_range": "mức giá (rẻ/trung bình/đắt)",
+  "rating_preference": "có yêu cầu đánh giá cao không (true/false)",
+  "atmosphere": "không khí (lãng mạn, gia đình, công sở, casual)",
+  "meal_time": "bữa ăn (sáng/trưa/tối)",
+  "special_features": "yêu cầu đặc biệt (view đẹp, gần biển, có chỗ đậu xe)"
+}}
+
+Chỉ trích xuất thông tin có trong câu hỏi. Nếu không có thông tin nào thì để null."""
+            else:
+                prompt = f"""You are an assistant for analyzing restaurant search queries.
+
+User query: "{query}"
+
+Please analyze and extract the following information (return JSON):
+{{
+  "location": "city name (e.g., da nang, hoi an, hanoi)",
+  "cuisine_type": "cuisine type (e.g., seafood, vietnamese, japanese, korean, italian, french, chinese, thai, vegetarian)",
+  "keyword": "main search keyword (dish name, restaurant name, features)",
+  "price_range": "price level (cheap/moderate/expensive)",
+  "rating_preference": "requires high rating (true/false)",
+  "atmosphere": "atmosphere (romantic, family, business, casual)",
+  "meal_time": "meal time (breakfast/lunch/dinner)",
+  "special_features": "special requirements (good view, near beach, parking)"
+}}
+
+Only extract information present in the query. Use null if not mentioned."""
+            
+            # Use LLM to analyze query
+            llm_response = await self._call_llm_for_analysis(prompt)
+            
+            # Parse JSON response
+            import json
+            try:
+                params = json.loads(llm_response)
+                return self._convert_llm_params_to_api_params(params)
+            except json.JSONDecodeError:
+                # Fallback to enhanced keyword extraction if LLM fails
+                return self._extract_enhanced_search_criteria(query)
+                
+        except Exception as e:
+            logger.error(f"Error in LLM parameter extraction: {e}")
+            # Fallback to enhanced keyword extraction
+            return self._extract_enhanced_search_criteria(query)
+    
+    async def _call_llm_for_analysis(self, prompt: str) -> str:
+        """Call LLM for query analysis"""
+        try:
+            # Use OpenAI client for analysis
+            from app.llm.open_client import OpenAIClient
+            
+            llm_client = OpenAIClient()
+            if not llm_client.is_configured():
+                # Return simple fallback JSON if no LLM available
+                return '{"location": null, "cuisine_type": null, "keyword": null, "price_range": null, "rating_preference": null, "atmosphere": null, "meal_time": null, "special_features": null}'
+            
+            response = llm_client.generate_response(prompt, max_tokens=256, temperature=0.3)
+            return response or '{"location": null, "cuisine_type": null, "keyword": null, "price_range": null, "rating_preference": null, "atmosphere": null, "meal_time": null, "special_features": null}'
+            
+        except Exception as e:
+            logger.error(f"Error calling LLM for analysis: {e}")
+            # Return fallback JSON
+            return '{"location": null, "cuisine_type": null, "keyword": null, "price_range": null, "rating_preference": null, "atmosphere": null, "meal_time": null, "special_features": null}'
+    
+    def _convert_llm_params_to_api_params(self, llm_params: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert LLM extracted parameters to API parameters"""
+        api_params = {}
+        
+        # Location mapping
+        if llm_params.get("location"):
+            location = llm_params["location"].lower()
+            location_mapping = {
+                "đà nẵng": "đà nẵng", "da nang": "đà nẵng", "danang": "đà nẵng",
+                "hội an": "hội an", "hoi an": "hội an", "hoian": "hội an",
+                "hà nội": "hà nội", "hanoi": "hà nội", "ha noi": "hà nội",
+                "sài gòn": "hồ chí minh", "saigon": "hồ chí minh", "hồ chí minh": "hồ chí minh",
+                "huế": "huế", "hue": "huế"
+            }
+            api_params["city"] = location_mapping.get(location, location)
+        
+        # Keyword - combine cuisine and keyword
+        keywords = []
+        if llm_params.get("cuisine_type"):
+            keywords.append(llm_params["cuisine_type"])
+        if llm_params.get("keyword"):
+            keywords.append(llm_params["keyword"])
+        if keywords:
+            api_params["keyword"] = " ".join(keywords)
+        
+        # Additional context for filtering
+        api_params["llm_context"] = {
+            "price_range": llm_params.get("price_range"),
+            "rating_preference": llm_params.get("rating_preference"),
+            "atmosphere": llm_params.get("atmosphere"),
+            "meal_time": llm_params.get("meal_time"),
+            "special_features": llm_params.get("special_features")
+        }
+        
+        return api_params
+    
+    def _filter_services_by_llm_context(self, services: List[Service], llm_context: Dict[str, Any]) -> List[Service]:
+        """Filter services based on LLM extracted context"""
+        if not llm_context or not services:
+            return services
+        
+        filtered_services = []
+        
+        for service in services:
+            score = 0
+            
+            # Price range filtering
+            if llm_context.get("price_range"):
+                price_keywords = {
+                    "rẻ": ["bình dân", "rẻ", "giá tốt", "affordable", "cheap"],
+                    "trung bình": ["trung bình", "moderate", "vừa phải"],
+                    "đắt": ["cao cấp", "sang trọng", "premium", "luxury", "expensive"]
+                }
+                price_pref = llm_context["price_range"]
+                if price_pref in price_keywords:
+                    service_desc = (service.description or "").lower()
+                    service_name = (service.name or "").lower()
+                    service_types = (service.productTypes or "").lower()
+                    
+                    for keyword in price_keywords[price_pref]:
+                        if keyword in service_desc or keyword in service_name or keyword in service_types:
+                            score += 2
+                            break
+            
+            # Rating preference
+            if llm_context.get("rating_preference") and service.rating:
+                if service.rating >= 4.0:
+                    score += 3
+                elif service.rating >= 3.5:
+                    score += 1
+            
+            # Atmosphere filtering with enhanced keywords
+            if llm_context.get("atmosphere"):
+                atmosphere = llm_context["atmosphere"]
+                service_desc = (service.description or "").lower()
+                service_name = (service.name or "").lower()
+                service_types = (service.productTypes or "").lower()
+                
+                atmosphere_keywords = {
+                    "lãng mạn": ["romantic", "lãng mạn", "couple", "date", "view", "rooftop", "bar", "wine", "bistro", "fine dining"],
+                    "gia đình": ["family", "gia đình", "trẻ em", "kids", "buffet", "rộng rãi", "all seasons", "garden", "phở", "bún"],
+                    "công sở": ["business", "meeting", "conference", "wifi", "quiet", "cafe", "coffee", "bistro", "lounge"],
+                    "casual": ["casual", "thường ngày", "thoải mái", "friends", "street food", "quán", "bình dân"]
+                }
+                
+                if atmosphere in atmosphere_keywords:
+                    keyword_matches = 0
+                    for keyword in atmosphere_keywords[atmosphere]:
+                        if keyword in service_desc or keyword in service_name or keyword in service_types:
+                            keyword_matches += 1
+                    
+                    if keyword_matches > 0:
+                        score += 3 + keyword_matches  # Higher score for more matches
+                    else:
+                        # Boost score based on service type patterns
+                        if atmosphere == "lãng mạn" and any(word in service_name for word in ["bar", "restaurant", "bistro"]):
+                            score += 2
+                        elif atmosphere == "gia đình" and any(word in service_name for word in ["buffet", "phở", "bún", "quán"]):
+                            score += 2
+                        elif atmosphere == "công sở" and any(word in service_name for word in ["cafe", "coffee", "bistro"]):
+                            score += 2
+            
+            # Special features
+            if llm_context.get("special_features"):
+                features = llm_context["special_features"].lower()
+                service_desc = (service.description or "").lower()
+                service_name = (service.name or "").lower()
+                
+                if "view" in features and ("view" in service_desc or "view" in service_name or "rooftop" in service_name):
+                    score += 3
+                if "biển" in features and ("beach" in service_desc or "ocean" in service_desc or "biển" in service_desc):
+                    score += 3
+                if "đậu xe" in features and ("parking" in service_desc or "đậu xe" in service_desc):
+                    score += 1
+            
+            # Add service with score
+            filtered_services.append((service, score))
+        
+        # Sort by score (descending) and return services
+        filtered_services.sort(key=lambda x: x[1], reverse=True)
+        return [service for service, score in filtered_services]
+    
+    def _extract_enhanced_search_criteria(self, query: str) -> Dict[str, Any]:
+        """Enhanced keyword-based parameter extraction without LLM"""
+        query_lower = query.lower()
+        api_params = {}
+        
+        # Location extraction with scoring
+        location_keywords = {
+            "đà nẵng": ["đà nẵng", "da nang", "danang"],
+            "hội an": ["hội an", "hoi an", "hoian"], 
+            "hà nội": ["hà nội", "hanoi", "ha noi"],
+            "hồ chí minh": ["sài gòn", "saigon", "hồ chí minh", "ho chi minh", "hcm"],
+            "huế": ["huế", "hue"]
+        }
+        
+        for city, variants in location_keywords.items():
+            if any(variant in query_lower for variant in variants):
+                api_params["city"] = city
+                break
+        
+        # Cuisine type extraction with keyword combinations
+        cuisine_mapping = {
+            "hải sản": ["hải sản", "seafood", "tôm", "cua", "cá", "sò", "ốc"],
+            "việt nam": ["việt nam", "vietnamese", "phở", "bún", "bánh", "mì quảng", "bánh xèo"],
+            "nhật bản": ["nhật", "japanese", "sushi", "sashimi", "ramen", "udon"],
+            "hàn quốc": ["hàn", "korean", "bbq", "kimchi", "bulgogi"],
+            "trung quốc": ["trung quốc", "chinese", "dimsum", "mì xào"],
+            "ý": ["ý", "italy", "italian", "pizza", "pasta"],
+            "pháp": ["pháp", "french"],
+            "thái": ["thái", "thai", "tom yum", "pad thai"],
+            "chay": ["chay", "vegetarian", "vegan", "healthy"]
+        }
+        
+        # Build keyword from detected cuisine
+        keywords = []
+        llm_context = {}
+        
+        for cuisine, cuisine_keywords in cuisine_mapping.items():
+            if any(keyword in query_lower for keyword in cuisine_keywords):
+                keywords.append(cuisine)
+                llm_context["cuisine_type"] = cuisine
+                break
+        
+        # Price range detection
+        if any(word in query_lower for word in ["rẻ", "cheap", "giá rẻ", "bình dân"]):
+            llm_context["price_range"] = "rẻ"
+        elif any(word in query_lower for word in ["đắt", "expensive", "cao cấp", "sang trọng", "luxury"]):
+            llm_context["price_range"] = "đắt"
+        
+        # Rating preference
+        if any(word in query_lower for word in ["ngon", "tốt", "good", "best", "nổi tiếng", "famous"]):
+            llm_context["rating_preference"] = True
+        
+        # Atmosphere detection
+        if any(word in query_lower for word in ["lãng mạn", "romantic", "date", "hẹn hò"]):
+            llm_context["atmosphere"] = "lãng mạn"
+        elif any(word in query_lower for word in ["gia đình", "family", "trẻ em", "buffet"]):
+            llm_context["atmosphere"] = "gia đình"
+        elif any(word in query_lower for word in ["meeting", "công việc", "business"]):
+            llm_context["atmosphere"] = "công sở"
+        
+        # Special features
+        if any(word in query_lower for word in ["view", "view đẹp", "rooftop", "tầng cao"]):
+            llm_context["special_features"] = "view đẹp"
+        elif any(word in query_lower for word in ["biển", "beach", "ocean"]):
+            llm_context["special_features"] = "gần biển"
+        elif any(word in query_lower for word in ["đậu xe", "parking"]):
+            llm_context["special_features"] = "có chỗ đậu xe"
+        
+        # Meal time
+        if any(word in query_lower for word in ["sáng", "breakfast", "bữa sáng"]):
+            llm_context["meal_time"] = "sáng"
+        elif any(word in query_lower for word in ["trưa", "lunch", "bữa trưa"]):
+            llm_context["meal_time"] = "trưa"
+        elif any(word in query_lower for word in ["tối", "dinner", "bữa tối", "tối nay"]):
+            llm_context["meal_time"] = "tối"
+        
+        # Specific dish/restaurant name extraction
+        dish_keywords = [
+            "phở", "bún", "bánh mì", "bánh xèo", "mì quảng", "bún bò", "lẩu",
+            "sushi", "sashimi", "pizza", "pasta", "dimsum", "bbq", "buffet"
+        ]
+        
+        for dish in dish_keywords:
+            if dish in query_lower:
+                keywords.append(dish)
+                break
+        
+        # Restaurant type keywords
+        restaurant_types = ["nhà hàng", "quán", "café", "bar", "bistro", "restaurant"]
+        detected_type = None
+        for rtype in restaurant_types:
+            if rtype in query_lower:
+                detected_type = rtype
+                break
+        
+        # Combine keywords intelligently
+        if keywords:
+            api_params["keyword"] = " ".join(keywords)
+        elif detected_type and llm_context.get("cuisine_type"):
+            api_params["keyword"] = llm_context["cuisine_type"]
+        
+        # Add LLM context for filtering
+        if llm_context:
+            api_params["llm_context"] = llm_context
+        
+        return api_params
     

@@ -290,12 +290,15 @@ Khi thông tin được thu thập thành công:
 
 ### TripC API Base URL
 ```
-https://api.tripc.ai
+https://tripc-api.allyai.ai (Development)
+https://api.tripc.ai (Production)
 ```
 
 ### Key TripC API Endpoints
-- `GET /api/services/restaurants?page=1&page_size=10` - Lấy danh sách nhà hàng
+- `GET /api/culinary-passport/suppliers?page=1&page_size=100` - Lấy suppliers trong Hộ chiếu ẩm thực Đà Nẵng
+- `GET /api/services/restaurants?page=1&supplier_type_slug=am-thuc&page_size=5` - Lấy danh sách nhà hàng
 - `GET /api/services/restaurants/{id}` - Chi tiết nhà hàng cụ thể
+- `GET /api/services/hotels?page=1&page_size=100&supplier_type_slug=luu-tru` - Lấy danh sách khách sạn
 
 ### API Authentication
 ```bash
@@ -337,9 +340,15 @@ Authorization: Bearer {access_token}
   "sources": [
     {
       "title": "TripC API - Nhà hàng Đà Nẵng", 
-      "url": "https://api.tripc.ai/services/restaurants",
+      "url": "https://tripc-api.allyai.ai/api/services/restaurants?supplier_type_slug=am-thuc",
       "imageUrl": "https://cdn.tripc.ai/sources/tripc-api.jpg"
       // ✅ Service sources từ TripC API metadata (real-time)
+    },
+    {
+      "title": "Hộ chiếu ẩm thực Đà Nẵng", 
+      "url": "https://tripc-api.allyai.ai/api/culinary-passport/suppliers",
+      "imageUrl": "https://cdn.tripc.ai/sources/culinary-passport.jpg"
+      // ✅ Culinary passport suppliers với seal_image_url đặc biệt
     }
   ]
 }
@@ -368,6 +377,7 @@ Service Request → TripC API Call → Live Service Data + Metadata → Response
 - **Real-time Service Data** từ TripC ecosystem
 - **Fresh Information** về restaurants, availability, prices
 - **Dynamic Sources** based on API metadata
+- **Culinary Passport Integration** với suppliers có seal_image_url đặc biệt
 
 Tối đa 5 địa điểm liên quan đến câu hỏi du lịch địa phương.
 
@@ -559,7 +569,21 @@ Thông tin chi tiết về địa điểm, bao gồm các trường cơ bản:
 {
   "type": "Service",
   "answerAI": "Tôi sẽ gợi ý một số nhà hàng phù hợp cho 6 người:",
-  "services": [{...}],
+  "services": [
+    {
+      "id": 11,
+      "name": "Bông",
+      "type": "restaurant",
+      "imageUrl": "https://tripc-dev.s3.amazonaws.com/images/17b6db06-278d-4504-a120-2bd6f4a9ed79/bông.jpg",
+      "seal_image_url": "https://tripc-dev.s3.amazonaws.com/images/culinary-passport-seal.png",
+      "rating": 0,
+      "totalReviews": 0,
+      "address": "500 Núi Thành, Hải Châu, Đà Nẵng",
+      "city": "Đà Nẵng",
+      "productTypes": "Trà sữa",
+      "description": "Quán Bông có không gian thoáng mát, rộng rãi."
+    }
+  ],
   "suggestions": [
     {
       "label": "Đặt bàn ngay",
@@ -621,6 +645,7 @@ Thông tin chi tiết về địa điểm, bao gồm các trường cơ bản:
 - 🍽️ **TripC API Integration**: Lấy dữ liệu nhà hàng từ API TripC
 - 🏨 **Service Recommendations**: Gợi ý dịch vụ phù hợp với nhu cầu
 - 📝 **Booking Collection**: Thu thập thông tin booking qua `/api/v1/user/collect-info`
+- 🏆 **Culinary Passport**: Hỗ trợ suppliers trong Hộ chiếu ẩm thực Đà Nẵng với seal_image_url
 
 #### Epic 5: CTA System
 - 🌐 **Web CTA**: Download app button cho web users
@@ -637,6 +662,7 @@ Thông tin chi tiết về địa điểm, bao gồm các trường cơ bản:
 - ✅ **Embedding Data**: JSON-based knowledge base với pre-indexed sources và imageURLs cho QnA responses
 - ✅ **Email System**: Automated booking notifications
 - 🔍 **Source Separation**: QnA sources từ embedding data, Service sources từ TripC API metadata
+- 🏆 **Culinary Passport**: Integration với suppliers có seal_image_url đặc biệt
 
 #### Response Types
 - ✅ **QnA Type**: AI answers với sources và suggestions

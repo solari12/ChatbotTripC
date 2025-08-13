@@ -43,6 +43,7 @@ class Service(BaseModel):
     # Image URLs
     imageUrl: Optional[str] = None  # logo_url
     coverImageUrl: Optional[str] = None  # cover_image_url
+    sealImageUrl: Optional[str] = None  # seal_image_url for culinary passport
     
     # Ratings & Reviews
     rating: Optional[float] = None
@@ -62,7 +63,8 @@ class Service(BaseModel):
     # Location coordinates (as per documentation)
     location: Optional[Dict[str, float]] = None  # {"lat": float, "lng": float}
     
-    # Note: NO webURL, deeplink, sealImageUrl, lat, long, isLike fields - app-first policy
+    # Note: NO webURL, deeplink, lat, long, isLike fields - app-first policy
+    # sealImageUrl is included for culinary passport suppliers
 
 
 class QnAResponse(BaseModel):

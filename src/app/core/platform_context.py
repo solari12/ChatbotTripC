@@ -3,6 +3,11 @@ from ..models.platform_models import PlatformContext, PlatformType, DeviceType, 
 from ..models.schemas import ChatRequest
 
 
+class InvalidPlatformError(Exception):
+    """Custom exception for invalid platform"""
+    pass
+
+
 class PlatformContextHandler:
     """Handles platform context detection and validation"""
     
@@ -11,6 +16,15 @@ class PlatformContextHandler:
             PlatformType.WEB_BROWSER: [DeviceType.DESKTOP, DeviceType.ANDROID, DeviceType.IOS],
             PlatformType.MOBILE_APP: [DeviceType.ANDROID, DeviceType.IOS]
         }
+    
+    def detect_platform_context(self, request: ChatRequest):
+        """Detect platform context as specified in architecture"""
+        if request.platform == PlatformType.MOBILE_APP:
+            return self.create_context(request)
+        elif request.platform == PlatformType.WEB_BROWSER:
+            return self.create_context(request)
+        else:
+            raise InvalidPlatformError(f"Unsupported platform: {request.platform}")
     
     def validate_platform_compatibility(self, platform: PlatformType, device: DeviceType) -> bool:
         """Validate platform and device compatibility"""

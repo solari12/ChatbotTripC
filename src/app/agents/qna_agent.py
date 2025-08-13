@@ -94,7 +94,7 @@ Ví dụ cho mobile_app:
 - Nếu hỏi nhà hàng: [show_services, show_services, collect_user_info]
 - Nếu hỏi địa điểm: [show_attractions, show_attractions, collect_user_info]
 
-Trả về chính xác theo format JSON này (không có text thêm):
+Trả về chính xác và nhanh nhất có thể theo format JSON này (không có text thêm):
 [
     {{"label": "Tên suggestion", "detail": "Mô tả chi tiết", "action": "show_services|show_attractions|collect_user_info|show_culture|download_app"}}
 ]"""

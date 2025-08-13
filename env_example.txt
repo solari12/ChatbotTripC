@@ -8,8 +8,6 @@
 # OpenAI API key (required for LLM responses)
 OPENAI_API_KEY=your_openai_api_key_here
 
-# TripC API token (required for service data)
-TRIPC_API_TOKEN=your_tripc_api_token_here
 
 # =============================================================================
 # 🏢 TripC API Configuration
@@ -70,3 +68,11 @@ ENABLE_LLM_RESPONSES=true
 ENABLE_VECTOR_SEARCH=true
 ENABLE_EMAIL_BOOKING=true
 ENABLE_PLATFORM_CTA=true
+
+PG_HOST=localhost
+PG_PORT=5433
+PG_USER=postgres
+PG_PASSWORD=123456
+PG_DATABASE=postgres
+
+POSTGRES_PASSWORD=123456

@@ -1,4 +1,5 @@
 import httpx
+import requests
 from typing import List, Optional, Dict, Any
 from ..models.schemas import Service, Source
 import logging
@@ -13,6 +14,30 @@ class TripCAPIClient:
         self.base_url = base_url.rstrip('/')
         self.access_token = access_token
         self.client = httpx.AsyncClient(timeout=30.0)
+        
+        # Auto-login if no token provided
+        if not self.access_token:
+            self.access_token = self._auto_login()
+    
+    def _auto_login(self) -> Optional[str]:
+        """Auto-login to get TripC API token"""
+        try:
+            login_data = {
+                "email": "haqctest123@gmail.com",
+                "password": "Ha03649@"
+            }
+            response = requests.post(f"{self.base_url}/auth/login", json=login_data, timeout=10)
+            response.raise_for_status()
+            token = response.json().get("token")
+            if token:
+                logger.info("Auto-login successful, got TripC API token")
+                return token
+            else:
+                logger.warning("Auto-login failed: no token in response")
+                return None
+        except Exception as e:
+            logger.error(f"Auto-login failed: {e}")
+            return None
     
     async def __aenter__(self):
         return self

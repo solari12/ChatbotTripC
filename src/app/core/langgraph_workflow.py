@@ -122,24 +122,26 @@ class LangGraphWorkflow:
 
 Hãy phân loại ý định của người dùng thành một trong ba loại sau, dựa trên nội dung và mục đích thật sự của câu hỏi:
 
-- "service": Người dùng muốn tìm kiếm, khám phá hoặc xem thông tin về nhà hàng, địa điểm du lịch hoặc các dịch vụ liên quan.
-- "service": Khi người dùng muốn tìm kiếm danh sách, khám phá hoặc xem các địa điểm, nhà hàng, dịch vụ mới hoặc tổng quan.
-- "qna": Khi người dùng hỏi về thông tin chi tiết, chính sách, câu hỏi cụ thể như giá vé, giờ mở cửa, ưu đãi, tư vấn,...
+- "service": Khi người dùng muốn TÌM KIẾM, KHÁM PHÁ, XEM DANH SÁCH các dịch vụ cụ thể như nhà hàng, khách sạn, tour, hoặc muốn tìm địa điểm để đi. Ví dụ: "tìm nhà hàng gần đây", "danh sách khách sạn", "tour nào đẹp", "có nhà hàng nào ngon không"
+- "booking": Khi người dùng muốn ĐẶT CHỖ, ĐẶT BÀN, ĐẶT TOUR, ĐẶT PHÒNG, hoặc thực hiện giao dịch. Ví dụ: "đặt bàn nhà hàng", "book tour", "đặt phòng khách sạn", "thanh toán"
+- "qna": Khi người dùng HỎI THÔNG TIN CHI TIẾT về một địa điểm, bảo tàng, di tích, hoặc hỏi thông tin chung, tư vấn. Ví dụ: "giới thiệu về bảo tàng", "bảo tàng có gì", "giá vé bao nhiêu", "giờ mở cửa", "xin chào", "tư vấn du lịch"
 
+QUAN TRỌNG: Nếu người dùng hỏi "giới thiệu về", "có gì", "thông tin về" một địa điểm cụ thể → đó là QnA, không phải service.
 
 Hãy cân nhắc kỹ và chọn loại phù hợp nhất với ý định sâu xa của người dùng.
 
-Chỉ trả về duy nhất một từ: service, booking, hoặc qna. Không trả lời thêm gì khác.
-
-"""
+Chỉ trả về duy nhất một từ: service, booking, hoặc qna. Không trả lời thêm gì khác."""
                 user_prompt = f"Phân loại ý định: {message}"
             else:
                 system_prompt = """You are an intelligent AI assistant. Classify the user's intent into one of the following types:
-                - "service": When the user wants to search, explore, or view information about restaurants, tourist attractions
-                - "booking": When the user wants to make reservations, book tables, book tours, or perform transactions
-                - "qna": When the user asks general information, seeks advice, or intent is unclear
-                
-                Return only one word: service, booking, or qna."""
+
+- "service": When the user wants to search, explore, view lists or information about restaurants, tourist attractions, hotels, tours, or related services. Examples: "find restaurants", "explore places", "hotel list", "what tours are good"
+- "booking": When the user wants to make reservations, book tables, book tours, book rooms, or perform transactions. Examples: "book restaurant table", "reserve tour", "book hotel room", "payment"
+- "qna": When the user asks general information, seeks advice, specific questions about prices, opening hours, policies, or intent is unclear. Examples: "how much is the ticket", "opening hours", "hello", "what's beautiful here"
+
+Consider carefully and choose the type that best matches the user's deep intention.
+
+Return only one word: service, booking, or qna."""
                 user_prompt = f"Classify intent: {message}"
             
             # Use LLM to classify intent
@@ -186,27 +188,69 @@ Chỉ trả về duy nhất một từ: service, booking, hoặc qna. Không tr�
         """Fallback keyword-based intent classification when LLM is unavailable"""
         message_lower = message.lower()
         
-        # Service intent keywords
+        # Service intent keywords - tìm kiếm, khám phá, xem danh sách
         service_keywords = [
-            "nhà hàng", "restaurant", "quán ăn", "địa điểm", "place",
-            "tìm", "search", "khám phá", "explore", "địa chỉ", "address",
-            "ở đâu", "where", "gần đây", "nearby", "khuyến mãi", "promotion"
+            # Từ khóa tìm kiếm
+            "tìm", "search", "find", "khám phá", "explore", "discover",
+            "xem", "show", "danh sách", "list", 
+            # Địa điểm cụ thể (chỉ khi tìm kiếm)
+            "nhà hàng", "restaurant", "quán ăn", "food", "dining",
+            "khách sạn", "hotel", "resort", "accommodation",
+            "tour", "sightseeing", "tham quan",
+            # Từ khóa vị trí
+            "ở đâu", "where", "địa chỉ", "address", "gần đây", "nearby",
+            "xung quanh", "around", "khu vực", "area", "đường", "street"
         ]
         
-        # Booking intent keywords
+        # Booking intent keywords - đặt chỗ, giao dịch
         booking_keywords = [
-            "đặt", "book", "reserve", "đặt bàn", "booking", "reservation",
-            "đặt chỗ", "đặt tour", "book tour", "đặt vé", "book ticket",
-            "đặt phòng", "book room", "thanh toán", "payment", "giá", "price"
+            # Từ khóa đặt chỗ
+            "đặt", "book", "reserve", "booking", "reservation",
+            "đặt bàn", "book table", "đặt chỗ", "book seat",
+            "đặt tour", "book tour", "đặt vé", "book ticket",
+            "đặt phòng", "book room", "đặt khách sạn", "book hotel",
+            # Từ khóa giao dịch
+            "thanh toán", "payment", "pay", "mua", "buy", "purchase",
+            "giá", "price", "cost", "chi phí", "fee", "phí",
+            # Từ khóa xác nhận
+            "xác nhận", "confirm", "đồng ý", "agree", "ok", "okay"
         ]
         
-        # Check for service intent
-        if any(keyword in message_lower for keyword in service_keywords):
-            return "service"
-        # Check for booking intent
-        elif any(keyword in message_lower for keyword in booking_keywords):
+        # QnA intent keywords - câu hỏi, tư vấn, thông tin chung
+        qna_keywords = [
+            # Câu hỏi
+            "là gì", "what is", "tại sao", "why", "như thế nào", "how",
+            "bao giờ", "when", "ai", "who", "cái gì", "what",
+            # Từ khóa tư vấn
+            "tư vấn", "advice", "gợi ý", "suggest", "khuyên", "recommend",
+            "nên", "should", "có nên", "is it good", "có tốt không",
+            # Từ khóa thông tin chung
+            "xin chào", "hello", "hi", "chào", "greeting",
+            "giờ mở cửa", "opening hours", "giờ đóng cửa", "closing time",
+            "chính sách", "policy", "điều kiện", "condition", "quy định", "rule"
+        ]
+        
+        # Check for QnA intent first (câu hỏi thông tin có priority cao)
+        qna_indicators = [
+            "giới thiệu về", "introduce about", "thông tin về", "info about",
+            "có gì", "what is", "là gì", "what's", "như thế nào", "how is",
+            "bảo tàng", "museum", "di tích", "heritage", "di sản", "heritage site"
+        ]
+        
+        if any(indicator in message_lower for indicator in qna_indicators):
+            return "qna"
+        
+        # Check for booking intent (second priority)
+        if any(keyword in message_lower for keyword in booking_keywords):
             return "booking"
+        # Check for service intent
+        elif any(keyword in message_lower for keyword in service_keywords):
+            return "service"
+        # Check for QnA intent
+        elif any(keyword in message_lower for keyword in qna_keywords):
+            return "qna"
         else:
+            # Default to QnA for unclear intent
             return "qna"
     
     async def _route_to_agent(self, state: WorkflowState) -> WorkflowState:

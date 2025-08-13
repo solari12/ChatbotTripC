@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+  # TripC.AI Chatbot API
+  tripc-chatbot-api:
+    build: .
+    container_name: tripc-chatbot-api
+    ports:
+      - "8000:8000"
+    environment:
+      # Required API Keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TRIPC_API_TOKEN=${TRIPC_API_TOKEN}
+      
+      # TripC API Configuration
+      - TRIPC_API_BASE_URL=${TRIPC_API_BASE_URL:-https://api.tripc.ai}
+      
+      # Database Configuration
+      - DATABASE_URL=postgresql://tripc_user:tripc_password@postgres:5432/tripc_chatbot
+      - VECTOR_DATABASE_URL=postgresql://tripc_user:tripc_password@postgres:5432/tripc_vectors
+      
+      # PostgreSQL Configuration
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=tripc_user
+      - PG_PASSWORD=tripc_password
+      - PG_DATABASE=tripc_vectors
+      
+      # Email Service (Optional)
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - BOOKING_EMAIL=${BOOKING_EMAIL:-booking@tripc.ai}
+      - NOREPLY_EMAIL=${NOREPLY_EMAIL:-noreply@tripc.ai}
+      
+      # Server Configuration
+      - HOST=0.0.0.0
+      - PORT=8000
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - DEBUG=${DEBUG:-false}
+      
+      # App Store URLs
+      - ANDROID_STORE_URL=${ANDROID_STORE_URL:-https://play.google.com/store/apps/details?id=com.tripc.ai.app}
+      - IOS_STORE_URL=${IOS_STORE_URL:-https://apps.apple.com/vn/app/tripc-app/id6745506417}
+      - GENERAL_APP_URL=${GENERAL_APP_URL:-https://tripc.ai/mobileapp}
+      
+      # Feature Flags
+      - ENABLE_LLM_RESPONSES=${ENABLE_LLM_RESPONSES:-true}
+      - ENABLE_VECTOR_SEARCH=${ENABLE_VECTOR_SEARCH:-true}
+      - ENABLE_EMAIL_BOOKING=${ENABLE_EMAIL_BOOKING:-true}
+      - ENABLE_PLATFORM_CTA=${ENABLE_PLATFORM_CTA:-true}
+      
+      # Embedding Models
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - tripc-network
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # PostgreSQL with PgVector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: tripc-postgres
+    environment:
+      - POSTGRES_DB=tripc_chatbot
+      - POSTGRES_USER=tripc_user
+      - POSTGRES_PASSWORD=tripc_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    restart: unless-stopped
+    networks:
+      - tripc-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tripc_user -d tripc_chatbot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: tripc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - tripc-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  tripc-network:
+    driver: bridge

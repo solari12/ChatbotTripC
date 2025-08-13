@@ -36,22 +36,36 @@ class Suggestion(BaseModel):
 
 
 class Service(BaseModel):
-    """Service information (restaurant, tour, etc.)"""
+    """Service information (restaurant, tour, etc.) - Complete API fields"""
     id: int
     name: str
     type: str
-    imageUrl: Optional[str] = None
-    coverImageUrl: Optional[str] = None
+    # Image URLs
+    imageUrl: Optional[str] = None  # logo_url
+    coverImageUrl: Optional[str] = None  # cover_image_url
+    sealImageUrl: Optional[str] = None  # seal_image_url
+    
+    # Ratings & Reviews
     rating: Optional[float] = None
     totalReviews: Optional[int] = None
-    address: Optional[str] = None
+    
+    # Location & Address
+    address: Optional[str] = None  # full_address
     city: Optional[str] = None
-    productTypes: Optional[str] = None
+    lat: Optional[str] = None  # latitude
+    long: Optional[str] = None  # longitude
+    
+    # Service Details
+    productTypes: Optional[str] = None  # product_types
     description: Optional[str] = None
-    priceRange: Optional[str] = None
-    workingHoursDisplay: Optional[str] = None
+    priceRange: Optional[str] = None  # price_range
+    workingHoursDisplay: Optional[str] = None  # working_hours_display
     amenities: Optional[List[str]] = None
-    location: Optional[Dict[str, float]] = None
+    
+    # Additional Fields
+    isLike: Optional[bool] = None  # is_like
+    location: Optional[Dict[str, float]] = None  # Legacy field for compatibility
+    
     # Note: NO webURL or deeplink fields - app-first policy
 
 

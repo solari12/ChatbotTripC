@@ -34,7 +34,7 @@ class ServiceAgent:
         }
     
     async def get_services(self, query: str, platform_context: PlatformContext, 
-                          service_type: str = "restaurant", page: int = 1) -> ServiceResponse:
+                          service_type: str = "restaurant", page: int = 6) -> ServiceResponse:
         """Get services based on query and type with LLM-powered responses"""
         try:
             # Determine service type from query

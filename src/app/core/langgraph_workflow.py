@@ -285,7 +285,13 @@ Chỉ trả về duy nhất một từ: service, booking, hoặc qna. Không tr�
                     device=platform_context.device
                 )
             
-            response["cta"] = cta.dict()
+            # Convert CTA to dict, excluding None values
+            cta_dict = cta.dict()
+            if cta_dict.get("deeplink") is None:
+                cta_dict.pop("deeplink", None)
+            if cta_dict.get("url") is None:
+                cta_dict.pop("url", None)
+            response["cta"] = cta_dict
             state["response"] = response
             
             return state

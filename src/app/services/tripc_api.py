@@ -53,17 +53,26 @@ class TripCAPIClient:
                     id=item.get("id"),
                     name=item.get("name", ""),
                     type="restaurant",
-                    imageUrl=item.get("logo_url") or item.get("cover_image_url"),
+                    # Image URLs
+                    imageUrl=item.get("logo_url"),
                     coverImageUrl=item.get("cover_image_url"),
+                    sealImageUrl=item.get("seal_image_url"),
+                    # Ratings & Reviews
                     rating=item.get("rating"),
                     totalReviews=item.get("total_reviews"),
-                    address=item.get("address", ""),
+                    # Location & Address
+                    address=item.get("full_address", item.get("address", "")),
                     city=item.get("city", ""),
+                    lat=item.get("lat"),
+                    long=item.get("long"),
+                    # Service Details
                     productTypes=item.get("product_types", ""),
                     description=item.get("description", ""),
                     priceRange=item.get("price_range", ""),
                     workingHoursDisplay=item.get("working_hours_display", ""),
                     amenities=item.get("amenities", []),
+                    # Additional Fields
+                    isLike=item.get("is_like"),
                     location=item.get("location")
                 )
                 restaurants.append(restaurant)
@@ -89,17 +98,26 @@ class TripCAPIClient:
                 id=data.get("id"),
                 name=data.get("name", ""),
                 type="restaurant",
-                imageUrl=data.get("logo_url") or data.get("cover_image_url"),
+                # Image URLs
+                imageUrl=data.get("logo_url"),
                 coverImageUrl=data.get("cover_image_url"),
+                sealImageUrl=data.get("seal_image_url"),
+                # Ratings & Reviews
                 rating=data.get("rating"),
                 totalReviews=data.get("total_reviews"),
-                address=data.get("address", ""),
+                # Location & Address
+                address=data.get("full_address", data.get("address", "")),
                 city=data.get("city", ""),
+                lat=data.get("lat"),
+                long=data.get("long"),
+                # Service Details
                 productTypes=data.get("product_types", ""),
                 description=data.get("description", ""),
                 priceRange=data.get("price_range", ""),
                 workingHoursDisplay=data.get("working_hours_display", ""),
                 amenities=data.get("amenities", []),
+                # Additional Fields
+                isLike=data.get("is_like"),
                 location=data.get("location")
             )
             
@@ -161,17 +179,26 @@ class TripCAPIClient:
                     id=item.get("id"),
                     name=item.get("name", ""),
                     type=item.get("type", service_type),
-                    imageUrl=item.get("logo_url") or item.get("cover_image_url"),
+                    # Image URLs
+                    imageUrl=item.get("logo_url"),
                     coverImageUrl=item.get("cover_image_url"),
+                    sealImageUrl=item.get("seal_image_url"),
+                    # Ratings & Reviews
                     rating=item.get("rating"),
                     totalReviews=item.get("total_reviews"),
-                    address=item.get("address", ""),
+                    # Location & Address
+                    address=item.get("full_address", item.get("address", "")),
                     city=item.get("city", ""),
+                    lat=item.get("lat"),
+                    long=item.get("long"),
+                    # Service Details
                     productTypes=item.get("product_types", ""),
                     description=item.get("description", ""),
                     priceRange=item.get("price_range", ""),
                     workingHoursDisplay=item.get("working_hours_display", ""),
                     amenities=item.get("amenities", []),
+                    # Additional Fields
+                    isLike=item.get("is_like"),
                     location=item.get("location")
                 )
                 services.append(service)

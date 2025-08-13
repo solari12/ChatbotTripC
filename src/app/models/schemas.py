@@ -36,14 +36,13 @@ class Suggestion(BaseModel):
 
 
 class Service(BaseModel):
-    """Service information (restaurant, tour, etc.) - Complete API fields"""
+    """Service information (restaurant, tour, etc.) - App-first policy, no individual URLs"""
     id: int
     name: str
     type: str
     # Image URLs
     imageUrl: Optional[str] = None  # logo_url
     coverImageUrl: Optional[str] = None  # cover_image_url
-    sealImageUrl: Optional[str] = None  # seal_image_url
     
     # Ratings & Reviews
     rating: Optional[float] = None
@@ -52,8 +51,6 @@ class Service(BaseModel):
     # Location & Address
     address: Optional[str] = None  # full_address
     city: Optional[str] = None
-    lat: Optional[str] = None  # latitude
-    long: Optional[str] = None  # longitude
     
     # Service Details
     productTypes: Optional[str] = None  # product_types
@@ -62,11 +59,10 @@ class Service(BaseModel):
     workingHoursDisplay: Optional[str] = None  # working_hours_display
     amenities: Optional[List[str]] = None
     
-    # Additional Fields
-    isLike: Optional[bool] = None  # is_like
-    location: Optional[Dict[str, float]] = None  # Legacy field for compatibility
+    # Location coordinates (as per documentation)
+    location: Optional[Dict[str, float]] = None  # {"lat": float, "lng": float}
     
-    # Note: NO webURL or deeplink fields - app-first policy
+    # Note: NO webURL, deeplink, sealImageUrl, lat, long, isLike fields - app-first policy
 
 
 class QnAResponse(BaseModel):

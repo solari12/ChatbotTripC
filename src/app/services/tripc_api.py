@@ -56,15 +56,27 @@ class TripCAPIClient:
         return headers
     
     async def get_restaurants(self, page: int = 1, page_size: int = 10, 
-                            city: Optional[str] = None) -> List[Service]:
-        """Get restaurant services from TripC API"""
+                            city: Optional[str] = None, keyword: Optional[str] = None,
+                            product_type_id: Optional[int] = None, province_id: Optional[int] = None,
+                            supplier_type_slug: Optional[str] = None) -> List[Service]:
+        """Get restaurant services from TripC API with advanced filtering"""
         try:
             params = {
                 "page": page,
                 "page_size": page_size
             }
+            
+            # Add optional filters
             if city:
-                params["city"] = city
+                params["keyword"] = city  # Use keyword for city search
+            elif keyword:
+                params["keyword"] = keyword  # Use keyword for general search
+            if product_type_id:
+                params["product_type_id"] = product_type_id
+            if province_id:
+                params["province_id"] = province_id
+            if supplier_type_slug:
+                params["supplier_type_slug"] = supplier_type_slug
             
             url = f"{self.base_url}/api/services/restaurants"
             response = await self.client.get(url, params=params, headers=self._get_headers())
@@ -74,6 +86,14 @@ class TripCAPIClient:
             restaurants = []
             
             for item in data.get("data", []):
+                # Extract location coordinates
+                location = None
+                if item.get("lat") and item.get("long"):
+                    location = {
+                        "lat": float(item.get("lat")),
+                        "lng": float(item.get("long"))
+                    }
+                
                 restaurant = Service(
                     id=item.get("id"),
                     name=item.get("name", ""),
@@ -81,24 +101,20 @@ class TripCAPIClient:
                     # Image URLs
                     imageUrl=item.get("logo_url"),
                     coverImageUrl=item.get("cover_image_url"),
-                    sealImageUrl=item.get("seal_image_url"),
                     # Ratings & Reviews
                     rating=item.get("rating"),
                     totalReviews=item.get("total_reviews"),
                     # Location & Address
                     address=item.get("full_address", item.get("address", "")),
                     city=item.get("city", ""),
-                    lat=item.get("lat"),
-                    long=item.get("long"),
                     # Service Details
                     productTypes=item.get("product_types", ""),
                     description=item.get("description", ""),
                     priceRange=item.get("price_range", ""),
                     workingHoursDisplay=item.get("working_hours_display", ""),
                     amenities=item.get("amenities", []),
-                    # Additional Fields
-                    isLike=item.get("is_like"),
-                    location=item.get("location")
+                    # Location coordinates
+                    location=location
                 )
                 restaurants.append(restaurant)
             
@@ -119,6 +135,15 @@ class TripCAPIClient:
             response.raise_for_status()
             
             data = response.json()
+            
+            # Extract location coordinates
+            location = None
+            if data.get("lat") and data.get("long"):
+                location = {
+                    "lat": float(data.get("lat")),
+                    "lng": float(data.get("long"))
+                }
+            
             restaurant = Service(
                 id=data.get("id"),
                 name=data.get("name", ""),
@@ -126,24 +151,20 @@ class TripCAPIClient:
                 # Image URLs
                 imageUrl=data.get("logo_url"),
                 coverImageUrl=data.get("cover_image_url"),
-                sealImageUrl=data.get("seal_image_url"),
                 # Ratings & Reviews
                 rating=data.get("rating"),
                 totalReviews=data.get("total_reviews"),
                 # Location & Address
                 address=data.get("full_address", data.get("address", "")),
                 city=data.get("city", ""),
-                lat=data.get("lat"),
-                long=data.get("long"),
                 # Service Details
                 productTypes=data.get("product_types", ""),
                 description=data.get("description", ""),
                 priceRange=data.get("price_range", ""),
                 workingHoursDisplay=data.get("working_hours_display", ""),
                 amenities=data.get("amenities", []),
-                # Additional Fields
-                isLike=data.get("is_like"),
-                location=data.get("location")
+                # Location coordinates
+                location=location
             )
             
             return restaurant

@@ -45,24 +45,74 @@ class ServiceAgent:
             # Extract search criteria from query
             search_criteria = self._extract_search_criteria(query)
             
-            # Build optimized search query
-            optimized_query = self._build_search_query(query, search_criteria)
-            
-            # Get services from TripC API based on service type
+            # Get services from TripC API based on service type with search criteria
             if service_type == "restaurant":
-                # Use search_services for restaurants to get relevant results based on query
-                services = await self.tripc_client.search_services(optimized_query, "restaurant", page=page, page_size=10)
-                
-                # If no results from search, fallback to general restaurant list
-                if not services:
-                    services = await self.tripc_client.get_restaurants(page=page, page_size=10)
+                # First try to get restaurants by location (more reliable)
+                if search_criteria.get("location"):
+                    # Get more pages to find specific cuisine
+                    all_services = []
+                    for p in range(1, 4):  # Get first 3 pages
+                        page_services = await self.tripc_client.get_restaurants(
+                            page=p, 
+                            page_size=20,
+                            city=search_criteria.get("location")
+                        )
+                        all_services.extend(page_services)
+                        if len(page_services) < 20:  # No more results
+                            break
+                    
+                    services = all_services
+                    
+                    # If cuisine is specified, filter the results
+                    if search_criteria.get("cuisine") and services:
+                        cuisine_filter = search_criteria.get("cuisine").lower()
+                        filtered_services = []
+                        for service in services:
+                            # Check if cuisine matches in name, description, or product types
+                            service_text = f"{service.name} {service.description} {service.productTypes}".lower()
+                            
+                            # More precise matching for specific cuisines
+                            if cuisine_filter == "nhật bản" or cuisine_filter == "japanese":
+                                # Look for Japanese-specific keywords
+                                japanese_keywords = ["nhật", "japanese", "sushi", "sashimi", "tempura", "ramen", "udon"]
+                                if any(keyword in service_text for keyword in japanese_keywords):
+                                    filtered_services.append(service)
+                            elif cuisine_filter == "italian":
+                                # Look for Italian-specific keywords
+                                italian_keywords = ["italian", "italy", "pizza", "pasta", "spaghetti", "risotto", "tiramisu"]
+                                if any(keyword in service_text for keyword in italian_keywords):
+                                    filtered_services.append(service)
+                            elif cuisine_filter == "việt nam" or cuisine_filter == "vietnamese":
+                                # Look for Vietnamese-specific keywords
+                                vietnamese_keywords = ["việt", "vietnamese", "phở", "bún", "bánh", "mì quảng", "cao lầu"]
+                                if any(keyword in service_text for keyword in vietnamese_keywords):
+                                    filtered_services.append(service)
+                            else:
+                                # General matching for other cuisines
+                                if cuisine_filter in service_text:
+                                    filtered_services.append(service)
+                        
+                        services = filtered_services
+                else:
+                    # Fallback to keyword search
+                    services = await self.tripc_client.get_restaurants(
+                        page=page, 
+                        page_size=10,
+                        keyword=search_criteria.get("cuisine")
+                    )
             elif service_type == "tour":
-                services = await self.tripc_client.search_services(optimized_query, "tour", page=page, page_size=10)
+                # For now, return empty list as tour endpoint doesn't exist
+                services = []
             elif service_type == "hotel":
-                services = await self.tripc_client.search_services(optimized_query, "hotel", page=page, page_size=10)
+                # For now, return empty list as hotel endpoint doesn't exist
+                services = []
             else:
-                # Generic search for other service types
-                services = await self.tripc_client.search_services(optimized_query, service_type, page=page, page_size=10)
+                # For other service types, try restaurants as fallback with basic search
+                services = await self.tripc_client.get_restaurants(
+                    page=page, 
+                    page_size=10,
+                    keyword=search_criteria.get("cuisine") or search_criteria.get("location")
+                )
             
             if not services:
                 return await self._get_no_services_response(platform_context, service_type)
@@ -85,10 +135,15 @@ class ServiceAgent:
             return await self._get_error_response(platform_context, service_type)
     
     async def get_restaurant_services(self, platform_context: PlatformContext, 
-                                    city: Optional[str] = None, page: int = 1) -> ServiceResponse:
+                                    city: Optional[str] = None, page: int = 1,
+                                    keyword: Optional[str] = None) -> ServiceResponse:
         """Get restaurant services specifically with LLM-powered responses"""
         try:
-            services = await self.tripc_client.get_restaurants(page=page, city=city)
+            services = await self.tripc_client.get_restaurants(
+                page=page, 
+                city=city,
+                keyword=keyword
+            )
             
             if not services:
                 return await self._get_no_services_response(platform_context, "restaurant")
@@ -419,11 +474,9 @@ Respond in English, naturally, friendly, under 80 words. Introduce {location} cu
             if service_type == "restaurant":
                 return await self.tripc_client.get_restaurant_detail(service_id)
             else:
-                # For other service types, use search with specific ID
-                services = await self.tripc_client.search_services(
-                    str(service_id), service_type, page=1, page_size=1
-                )
-                return services[0] if services else None
+                # For other service types, return None as endpoints don't exist yet
+                logger.warning(f"Service detail endpoint for {service_type} not implemented yet")
+                return None
                 
         except Exception as e:
             logger.error(f"Error getting service detail: {e}")
@@ -434,66 +487,78 @@ Respond in English, naturally, friendly, under 80 words. Introduce {location} cu
         query_lower = query.lower()
         criteria = {}
         
-        # Extract location/city
-        location_keywords = ["đà nẵng", "da nang", "hội an", "hoi an", "huế", "hue", "sài gòn", "saigon", "hà nội", "hanoi"]
-        for location in location_keywords:
-            if location in query_lower:
-                criteria["location"] = location
-                break
-        
-        # Extract cuisine type
-        cuisine_keywords = {
-            "hải sản": "seafood",
-            "seafood": "seafood", 
-            "việt nam": "vietnamese",
-            "vietnamese": "vietnamese",
-            "trung quốc": "chinese",
-            "chinese": "chinese",
-            "hàn quốc": "korean",
-            "korean": "korean",
-            "nhật bản": "japanese",
-            "japanese": "japanese",
-            "italy": "italian",
-            "italian": "italian",
-            "pháp": "french",
-            "french": "french",
-            "thái": "thai",
-            "thai": "thai",
-            "món chay": "vegetarian",
-            "vegetarian": "vegetarian"
+        # Extract location/city (expanded list)
+        location_keywords = {
+            "đà nẵng": "đà nẵng", "da nang": "đà nẵng", "danang": "đà nẵng",
+            "hội an": "hội an", "hoi an": "hội an", "hoian": "hội an",
+            "huế": "huế", "hue": "huế", "hue city": "huế",
+            "sài gòn": "sài gòn", "saigon": "sài gòn", "hồ chí minh": "sài gòn", "ho chi minh": "sài gòn",
+            "hà nội": "hà nội", "hanoi": "hà nội", "hà nội": "hà nội",
+            "nha trang": "nha trang", "vũng tàu": "vũng tàu", "vung tau": "vũng tàu",
+            "phú quốc": "phú quốc", "phu quoc": "phú quốc", "đà lạt": "đà lạt", "dalat": "đà lạt"
         }
         
-        for cuisine_vi, cuisine_en in cuisine_keywords.items():
-            if cuisine_vi in query_lower or cuisine_en in query_lower:
-                criteria["cuisine"] = cuisine_en
+        for location_key, location_value in location_keywords.items():
+            if location_key in query_lower:
+                criteria["location"] = location_value
+                break
+        
+        # Extract cuisine type (expanded list)
+        cuisine_keywords = {
+            # Vietnamese
+            "hải sản": "hải sản", "seafood": "hải sản", "tôm": "hải sản", "cua": "hải sản", "cá": "hải sản",
+            "việt nam": "việt nam", "vietnamese": "việt nam", "phở": "việt nam", "bún": "việt nam", "bánh": "việt nam",
+            "mì quảng": "việt nam", "bánh xèo": "việt nam", "lẩu": "việt nam", "bún bò": "việt nam",
+            
+            # International
+            "trung quốc": "trung quốc", "chinese": "trung quốc", "dimsum": "trung quốc", "mì xào": "trung quốc",
+            "hàn quốc": "hàn quốc", "korean": "hàn quốc", "bbq": "hàn quốc", "kimchi": "hàn quốc",
+            "nhật bản": "nhật bản", "japanese": "nhật bản", "sushi": "nhật bản", "sashimi": "nhật bản",
+            "italy": "italian", "italian": "italian", "pizza": "italian", "pasta": "italian", "ý": "italian",
+            "pháp": "pháp", "french": "pháp", "bánh mì": "pháp",
+            "thái": "thái", "thai": "thái", "tom yum": "thái", "pad thai": "thái",
+            
+            # Special diets
+            "món chay": "món chay", "vegetarian": "món chay", "chay": "món chay",
+            "vegan": "món chay", "không thịt": "món chay",
+            
+            # Drinks
+            "cafe": "cafe", "coffee": "cafe", "trà sữa": "trà sữa", "bubble tea": "trà sữa",
+            "soda": "soda", "nước ép": "nước ép", "juice": "nước ép"
+        }
+        
+        for cuisine_key, cuisine_value in cuisine_keywords.items():
+            if cuisine_key in query_lower:
+                criteria["cuisine"] = cuisine_value
                 break
         
         # Extract price range
-        if any(word in query_lower for word in ["rẻ", "cheap", "giá rẻ", "affordable"]):
+        if any(word in query_lower for word in ["rẻ", "cheap", "giá rẻ", "affordable", "bình dân", "dân dã"]):
             criteria["price_range"] = "low"
-        elif any(word in query_lower for word in ["đắt", "expensive", "cao cấp", "luxury", "premium"]):
+        elif any(word in query_lower for word in ["đắt", "expensive", "cao cấp", "luxury", "premium", "sang trọng"]):
             criteria["price_range"] = "high"
+        elif any(word in query_lower for word in ["trung bình", "moderate", "vừa phải"]):
+            criteria["price_range"] = "medium"
         
         # Extract rating preference
-        if any(word in query_lower for word in ["ngon", "tốt", "good", "best", "nổi tiếng", "famous"]):
+        if any(word in query_lower for word in ["ngon", "tốt", "good", "best", "nổi tiếng", "famous", "được đánh giá cao"]):
             criteria["rating"] = "high"
+        
+        # Extract meal time
+        if any(word in query_lower for word in ["sáng", "breakfast", "bữa sáng"]):
+            criteria["meal_time"] = "breakfast"
+        elif any(word in query_lower for word in ["trưa", "lunch", "bữa trưa"]):
+            criteria["meal_time"] = "lunch"
+        elif any(word in query_lower for word in ["tối", "dinner", "bữa tối", "tối nay"]):
+            criteria["meal_time"] = "dinner"
+        
+        # Extract special requirements
+        if any(word in query_lower for word in ["gần đây", "nearby", "gần", "close"]):
+            criteria["distance"] = "nearby"
+        if any(word in query_lower for word in ["view", "view đẹp", "nhìn ra biển", "ocean view"]):
+            criteria["view"] = "ocean"
+        if any(word in query_lower for word in ["romantic", "lãng mạn", "date", "hẹn hò"]):
+            criteria["atmosphere"] = "romantic"
         
         return criteria
     
-    def _build_search_query(self, original_query: str, criteria: Dict[str, str]) -> str:
-        """Build optimized search query based on extracted criteria"""
-        search_terms = []
-        
-        # Add original query terms
-        search_terms.append(original_query)
-        
-        # Add location if found
-        if "location" in criteria:
-            search_terms.append(criteria["location"])
-        
-        # Add cuisine if found
-        if "cuisine" in criteria:
-            search_terms.append(criteria["cuisine"])
-        
-        # Combine all terms
-        return " ".join(search_terms)

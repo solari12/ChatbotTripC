@@ -12,6 +12,7 @@ from ..models.schemas import ChatRequest, ChatResponse, QnAResponse
 from ..agents.qna_agent import QnAAgent
 from ..agents.service_agent import ServiceAgent
 from ..core.cta_engine import CTAEngine
+from ..core.conversation_memory import ConversationMemory
 
 from ..llm.open_client import OpenAIClient
 
@@ -23,6 +24,7 @@ class WorkflowState(TypedDict):
     platform: str
     device: str
     language: str
+    conversationId: Optional[str]
     
     # Processing
     platform_context: Optional[PlatformContext]
@@ -42,6 +44,7 @@ class AIAgentOrchestrator:
         self.service_agent = service_agent
         self.llm_client = llm_client or OpenAIClient()  # Auto-create if not provided
         self.cta_engine = CTAEngine()
+        self.memory = ConversationMemory()
 
         self.workflow = self._build_workflow()
     
@@ -55,13 +58,15 @@ class AIAgentOrchestrator:
         workflow.add_node("validate_platform", self._validate_platform)
         workflow.add_node("classify_intent", self._classify_intent)
         workflow.add_node("route_to_agent", self._route_to_agent)
+        workflow.add_node("rewrite_to_standalone", self._rewrite_to_standalone)
         workflow.add_node("add_cta", self._add_cta)
         workflow.add_node("format_response", self._format_response)
         
         # Add edges
         workflow.set_entry_point("validate_platform")
         workflow.add_edge("validate_platform", "classify_intent")
-        workflow.add_edge("classify_intent", "route_to_agent")
+        workflow.add_edge("classify_intent", "rewrite_to_standalone")
+        workflow.add_edge("rewrite_to_standalone", "route_to_agent")
         workflow.add_edge("route_to_agent", "add_cta")
         workflow.add_edge("add_cta", "format_response")
         workflow.add_edge("format_response", END)
@@ -118,21 +123,31 @@ class AIAgentOrchestrator:
             
             # Optimized prompts for fast and accurate intent classification
             if language == "vi":
-                system_prompt = """Phân loại nhanh ý định người dùng:
-- "service": TÌM KIẾM nhà hàng, khách sạn, tour, địa điểm
-- "booking": ĐẶT CHỖ, đặt bàn, book tour, thanh toán  
-- "qna": HỎI THÔNG TIN, tư vấn, giới thiệu, giá vé, giờ mở cửa
+                system_prompt = """Phân loại ý định người dùng (chỉ trả về đúng 1 từ: service/booking/qna):
+- service: người dùng muốn TÌM/Khám phá/Đề xuất dịch vụ để sử dụng (ăn uống, nghỉ ngơi, khách sạn, nhà hàng, tour, điểm đến, kế hoạch đi đâu)
+- booking: người dùng có Ý ĐỊNH ĐẶT chỗ/đặt bàn/đặt tour/xác nhận giữ chỗ/yêu cầu liên hệ để đặt
+- qna: người dùng HỎI THÔNG TIN chung (mô tả, đánh giá, "đẹp không", giá vé, giờ mở cửa, so sánh, hướng dẫn)
 
-Trả về 1 từ: service/booking/qna"""
-                user_prompt = f"'{message}' →"
+Ví dụ:
+- "Tôi muốn tìm nhà hàng hải sản" → service
+- "Đặt bàn lúc 7h tối nay" → booking
+- "Bảo tàng Đà Nẵng có đẹp không?" → qna
+
+Chỉ trả về: service hoặc booking hoặc qna"""
+                user_prompt = f"Câu: '{message}'\nKết quả:"
             else:
-                system_prompt = """Quick intent classification:
-- "service": SEARCH restaurants, hotels, tours, places
-- "booking": BOOK, reserve, pay, transaction
-- "qna": ASK info, advice, prices, hours, general
+                system_prompt = """Classify intent (return exactly ONE word: service/booking/qna):
+- service: user wants to FIND/Explore/Recommend services to use (food, rest, hotels, restaurants, tours, destinations, plan where to go)
+- booking: user INTENDS to BOOK/reserve/confirm a table/tour or asks to be contacted to book
+- qna: user ASKS general info (description, reviews, "is it beautiful?", ticket prices, opening hours, comparisons, guidance)
 
-Return 1 word: service/booking/qna"""
-                user_prompt = f"'{message}' →"
+Examples:
+- "Find a seafood restaurant" → service
+- "Book a table at 7pm" → booking
+- "Is Da Nang Museum beautiful?" → qna
+
+Return only: service or booking or qna"""
+                user_prompt = f"Input: '{message}'\nOutput:"
             
             # Use LLM to classify intent
             if self.llm_client:
@@ -174,12 +189,56 @@ Return 1 word: service/booking/qna"""
             print(f"❌ Intent classification error: {e}")
             state["intent"] = "qna"
             return state
+
+    async def _rewrite_to_standalone(self, state: WorkflowState) -> WorkflowState:
+        """Rewrite current message to a standalone question using recent context"""
+        try:
+            conversation_id = state.get("conversationId") or "default"
+            recent_turns = self.memory.get_recent(conversation_id, k=4)
+            entities = self.memory.get_entities(conversation_id)
+            message = state["message"]
+            language = state.get("language", "vi")
+
+            # Heuristic pronoun resolution
+            def heuristic_fill(msg: str) -> Optional[str]:
+                lower = msg.lower()
+                pronouns_vi = ["ở đó", "nó", "chỗ đó", "nơi đó"]
+                pronouns_en = ["there", "it", "that place"]
+                pronouns = pronouns_vi + pronouns_en
+                if any(p in lower for p in pronouns):
+                    place = entities.get("current_place") or entities.get("last_mentioned_place")
+                    if place:
+                        filled = msg
+                        for p in pronouns_vi:
+                            filled = filled.replace(p, place)
+                        for p in pronouns_en:
+                            filled = filled.replace(p, place)
+                        return filled
+                return None
+
+            rewritten = heuristic_fill(message)
+
+            if not rewritten and self.llm_client and self.llm_client.is_configured():
+                history_text = "\n".join([f"{t['role']}: {t['content']}" for t in recent_turns])
+                sys_vi = "Viết lại câu sau thành một câu độc lập, sử dụng ngữ cảnh hội thoại:"
+                sys_en = "Rewrite the following into a standalone question, using the chat context:"
+                system = sys_vi if language == "vi" else sys_en
+                prompt = f"{system}\n\nContext:\n{history_text}\n\nUser: {message}\nStandalone:"
+                out = self.llm_client.generate_response(prompt, max_tokens=80, temperature=0.2)
+                if out:
+                    rewritten = out.strip()
+
+            state["message"] = rewritten or message
+            return state
+        except Exception as e:
+            print(f"❌ Rewrite error: {e}")
+            return state
     
     def _fallback_keyword_classification(self, message: str) -> str:
         """Fallback keyword-based intent classification when LLM is unavailable"""
         message_lower = message.lower()
         
-        # Service intent keywords - tìm kiếm, khám phá, xem danh sách
+        # Service intent keywords - tìm kiếm, khám phá, xem danh sách, nhu cầu sử dụng dịch vụ
         service_keywords = [
             # Từ khóa tìm kiếm
             "tìm", "search", "find", "khám phá", "explore", "discover",
@@ -190,7 +249,9 @@ Return 1 word: service/booking/qna"""
             "tour", "sightseeing", "tham quan",
             # Từ khóa vị trí
             "ở đâu", "where", "địa chỉ", "address", "gần đây", "nearby",
-            "xung quanh", "around", "khu vực", "area", "đường", "street"
+            "xung quanh", "around", "khu vực", "area", "đường", "street",
+            # Nhu cầu sử dụng dịch vụ
+            "ăn uống", "ăn", "bữa", "ngủ", "nghỉ ngơi", "thư giãn", "rest", "relax"
         ]
         
         # Booking intent keywords - đặt chỗ, giao dịch
@@ -218,14 +279,17 @@ Return 1 word: service/booking/qna"""
             # Từ khóa thông tin chung
             "xin chào", "hello", "hi", "chào", "greeting",
             "giờ mở cửa", "opening hours", "giờ đóng cửa", "closing time",
-            "chính sách", "policy", "điều kiện", "condition", "quy định", "rule"
+            "chính sách", "policy", "điều kiện", "condition", "quy định", "rule",
+            # Thông tin/đánh giá/vé
+            "đẹp không", "review", "đánh giá", "giá vé", "vé bao nhiêu", "ticket", "ticket price"
         ]
         
         # Check for QnA intent first (câu hỏi thông tin có priority cao)
         qna_indicators = [
             "giới thiệu về", "introduce about", "thông tin về", "info about",
             "có gì", "what is", "là gì", "what's", "như thế nào", "how is",
-            "bảo tàng", "museum", "di tích", "heritage", "di sản", "heritage site"
+            "bảo tàng", "museum", "di tích", "heritage", "di sản", "heritage site",
+            "đẹp không", "giá vé", "ticket price", "opening hours"
         ]
         
         if any(indicator in message_lower for indicator in qna_indicators):
@@ -249,6 +313,7 @@ Return 1 word: service/booking/qna"""
         intent = state["intent"]
         platform_context = state["platform_context"]
         message = state["message"]
+        conversation_id = state.get("conversationId") or "default"
         
         try:
             if intent == "service":
@@ -259,6 +324,19 @@ Return 1 word: service/booking/qna"""
                     service_type="restaurant"
                 )
                 state["response"] = response.dict()
+                # Store entity for follow-ups
+                try:
+                    services = state["response"].get("services") or []
+                    if services:
+                        top = services[0]
+                        place_name = top.get("name")
+                        if place_name:
+                            self.memory.set_entities(conversation_id, {
+                                "current_place": place_name,
+                                "last_mentioned_place": place_name
+                            })
+                except Exception:
+                    pass
                 
             elif intent == "booking":
                 # For booking, provide clear, localized guidance and CTA to collect info via separate endpoint
@@ -401,6 +479,7 @@ Return 1 word: service/booking/qna"""
             platform=request.platform,
             device=request.device,
             language=request.language,
+            conversationId=getattr(request, "conversationId", None),
             platform_context=None,
             intent=None,
             response=None,
@@ -410,11 +489,20 @@ Return 1 word: service/booking/qna"""
         
         # Execute workflow
         try:
+            # Save user turn
+            conversation_id = getattr(request, "conversationId", None) or "default"
+            self.memory.add_turn(conversation_id, "user", request.message)
+
             # Run the workflow
             result = await self.workflow.ainvoke(initial_state)
             
             # Return final response
             if result.get("final_response"):
+                # Save assistant turn
+                try:
+                    self.memory.add_turn(conversation_id, "assistant", result["final_response"].answerAI, meta={"type": result["final_response"].type})
+                except Exception:
+                    pass
                 return result["final_response"]
             else:
                 # Fallback error response

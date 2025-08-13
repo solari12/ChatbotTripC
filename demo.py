@@ -331,17 +331,62 @@ def demo_system_status():
     
     print("-" * 40)
 
+def demo_repl_memory():
+    """Interactive loop to test conversational memory and standalone rewrite"""
+    print_separator("Interactive REPL: Memory & Rewrite Test")
+    print("Type 'exit' to quit.")
+    conversation_id = "demo_conv_001"
+    platform = "web_browser"
+    device = "desktop"
+    language = "vi"
+
+    while True:
+        try:
+            user_msg = input("You: ").strip()
+            if user_msg.lower() in ["exit", "quit", ":q"]:
+                break
+
+            payload = {
+                "message": user_msg,
+                "platform": platform,
+                "device": device,
+                "language": language,
+                "conversationId": conversation_id
+            }
+
+            resp = requests.post(f"{BASE_URL}/api/v1/chatbot/response", json=payload)
+            if resp.status_code != 200:
+                print(f"❌ {resp.status_code}: {resp.text}")
+                continue
+
+            data = resp.json()
+            print(f"AI: {data.get('answerAI', '')}")
+            if data.get('suggestions'):
+                print("Suggestions:")
+                for i, s in enumerate(data['suggestions'][:3], 1):
+                    label = s.get('label')
+                    action = s.get('action')
+                    print(f"  {i}. {label} ({action})")
+            if data.get('cta'):
+                cta = data['cta']
+                print(f"CTA: {cta.get('label')} -> {cta.get('url') or cta.get('deeplink')}")
+
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            print(f"❌ Error: {e}")
+
 def main():
     """Run all demos"""
     print("🧠 TripC.AI Chatbot API - Feature Demo")
     print("Platform-Aware, App-First Architecture")
     
     try:
-        demo_platform_awareness()
-        demo_language_support()
-        demo_intent_classification()
-        demo_booking_workflow()
-        demo_system_status()
+        # demo_platform_awareness()
+        # demo_language_support()
+        # demo_intent_classification()
+        # demo_booking_workflow()
+        # demo_system_status()
         
         print("\n🎉 All demos completed successfully!")
         print("\n📚 Key Features Demonstrated:")
@@ -352,6 +397,9 @@ def main():
         print("✅ Platform-specific CTAs")
         print("✅ Booking workflow integration")
         print("✅ System monitoring & status")
+        
+        # Start interactive loop for memory/rewrite testing
+        demo_repl_memory()
         
     except requests.exceptions.ConnectionError:
         print("❌ Error: Could not connect to API. Make sure the server is running on http://localhost:8000")

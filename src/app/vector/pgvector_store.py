@@ -32,7 +32,7 @@ def search_similar(embedding_str, limit=3):
                 """
                 SELECT id, json_path, raw_content, embedding <-> %s AS distance
                 FROM embedding
-                WHERE embedding <-> %s < 0.5
+                WHERE embedding <-> %s < 0.35
                 ORDER BY distance
                 LIMIT %s;
                 """,

@@ -49,7 +49,11 @@ class ServiceAgent:
                 # Use general restaurants API with am-thuc filter and smart parameters
                 # Get more pages if we need variety for filtering
                 llm_context = search_params.get("llm_context", {})
-                needs_variety = any(llm_context.get(key) for key in ["atmosphere", "price_range", "special_features"])
+                # Fetch more pages when we lack clear filters to avoid repetitive first-page items
+                needs_variety = (
+                    not (search_params.get("city") or search_params.get("keyword"))
+                    or any(llm_context.get(key) for key in ["atmosphere", "price_range", "special_features"])
+                )
                 
                 if needs_variety:
                     # Get from multiple pages for better variety
@@ -76,8 +80,17 @@ class ServiceAgent:
                         supplier_type_slug="am-thuc"
                     )
                 
-                # Apply LLM context filtering
+                # Apply LLM context filtering and de-duplicate by name/address
                 services = self._filter_services_by_llm_context(services, llm_context)
+                if services:
+                    unique = {}
+                    for s in services:
+                        key = (s.name or "").strip().lower() + "|" + (s.address or "").strip().lower()
+                        if key not in unique:
+                            unique[key] = s
+                    services = list(unique.values())
+                    # Prefer higher rating if available
+                    services.sort(key=lambda x: (x.rating is not None, x.rating or 0), reverse=True)
                 
                 # Limit to 5 best matches
                 services = services[:5]
@@ -94,6 +107,15 @@ class ServiceAgent:
                 if search_params.get("city") and services:
                     location_filter = search_params.get("city").lower()
                     services = [s for s in services if location_filter in (s.city or "").lower() or location_filter in (s.address or "").lower()]
+                # De-duplicate and sort by rating
+                if services:
+                    unique = {}
+                    for s in services:
+                        key = (s.name or "").strip().lower() + "|" + (s.address or "").strip().lower()
+                        if key not in unique:
+                            unique[key] = s
+                    services = list(unique.values())
+                    services.sort(key=lambda x: (x.rating is not None, x.rating or 0), reverse=True)
                 
                 # Limit to 5 for response
                 services = services[:5]
@@ -110,6 +132,15 @@ class ServiceAgent:
                 if search_params.get("city") and services:
                     location_filter = search_params.get("city").lower()
                     services = [s for s in services if location_filter in (s.city or "").lower() or location_filter in (s.address or "").lower()]
+                # De-duplicate and sort by rating
+                if services:
+                    unique = {}
+                    for s in services:
+                        key = (s.name or "").strip().lower() + "|" + (s.address or "").strip().lower()
+                        if key not in unique:
+                            unique[key] = s
+                    services = list(unique.values())
+                    services.sort(key=lambda x: (x.rating is not None, x.rating or 0), reverse=True)
                 
                 # Limit to 5 for response
                 services = services[:5]

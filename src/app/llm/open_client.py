@@ -32,7 +32,7 @@ class OpenAIClient:
         """Kiểm tra xem client đã được cấu hình chưa"""
         return bool(self.api_key and self.api_key != "your_openai_api_key_here")
 
-    def generate_response(self, prompt: str, model: str = "gpt-4o-mini", max_tokens: int = 512) -> Optional[str]:
+    def generate_response(self, prompt: str, model: str = "gpt-4o-mini", max_tokens: int = 512, temperature: float = 0.7) -> Optional[str]:
         """
         Gửi prompt đến LLM API (OpenAI hoặc Qwen nếu đổi URL) và nhận về câu trả lời.
         """
@@ -52,7 +52,7 @@ class OpenAIClient:
                 {"role": "user", "content": prompt}
             ],
             "max_tokens": max_tokens,
-            "temperature": 0.7
+            "temperature": temperature
         }
 
         try:

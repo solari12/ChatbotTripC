@@ -116,33 +116,23 @@ class AIAgentOrchestrator:
             message = state["message"]
             language = state.get("language", "vi")
             
-            # Use direct prompts for intent classification
+            # Optimized prompts for fast and accurate intent classification
             if language == "vi":
-                system_prompt = """Bạn là một trợ lý AI thông minh, có khả năng suy luận và hiểu thấu đáo ý định thực sự của người dùng qua từng câu hỏi.
+                system_prompt = """Phân loại nhanh ý định người dùng:
+- "service": TÌM KIẾM nhà hàng, khách sạn, tour, địa điểm
+- "booking": ĐẶT CHỖ, đặt bàn, book tour, thanh toán  
+- "qna": HỎI THÔNG TIN, tư vấn, giới thiệu, giá vé, giờ mở cửa
 
-Hãy phân loại ý định của người dùng thành một trong ba loại sau, dựa trên nội dung và mục đích thật sự của câu hỏi:
-
-- "service": Khi người dùng muốn TÌM KIẾM, KHÁM PHÁ, XEM DANH SÁCH các dịch vụ cụ thể như nhà hàng, khách sạn, tour, hoặc muốn tìm địa điểm để đi. Ví dụ: "tìm nhà hàng gần đây", "danh sách khách sạn", "tour nào đẹp", "có nhà hàng nào ngon không"
-- "booking": Khi người dùng muốn ĐẶT CHỖ, ĐẶT BÀN, ĐẶT TOUR, ĐẶT PHÒNG, hoặc thực hiện giao dịch. Ví dụ: "đặt bàn nhà hàng", "book tour", "đặt phòng khách sạn", "thanh toán"
-- "qna": Khi người dùng HỎI THÔNG TIN CHI TIẾT về một địa điểm, bảo tàng, di tích, hoặc hỏi thông tin chung, tư vấn. Ví dụ: "giới thiệu về bảo tàng", "bảo tàng có gì", "giá vé bao nhiêu", "giờ mở cửa", "xin chào", "tư vấn du lịch"
-
-QUAN TRỌNG: Nếu người dùng hỏi "giới thiệu về", "có gì", "thông tin về" một địa điểm cụ thể → đó là QnA, không phải service.
-
-Hãy cân nhắc kỹ và chọn loại phù hợp nhất với ý định sâu xa của người dùng.
-
-Chỉ trả về duy nhất một từ: service, booking, hoặc qna. Không trả lời thêm gì khác."""
-                user_prompt = f"Phân loại ý định: {message}"
+Trả về 1 từ: service/booking/qna"""
+                user_prompt = f"'{message}' →"
             else:
-                system_prompt = """You are an intelligent AI assistant. Classify the user's intent into one of the following types:
+                system_prompt = """Quick intent classification:
+- "service": SEARCH restaurants, hotels, tours, places
+- "booking": BOOK, reserve, pay, transaction
+- "qna": ASK info, advice, prices, hours, general
 
-- "service": When the user wants to search, explore, view lists or information about restaurants, tourist attractions, hotels, tours, or related services. Examples: "find restaurants", "explore places", "hotel list", "what tours are good"
-- "booking": When the user wants to make reservations, book tables, book tours, book rooms, or perform transactions. Examples: "book restaurant table", "reserve tour", "book hotel room", "payment"
-- "qna": When the user asks general information, seeks advice, specific questions about prices, opening hours, policies, or intent is unclear. Examples: "how much is the ticket", "opening hours", "hello", "what's beautiful here"
-
-Consider carefully and choose the type that best matches the user's deep intention.
-
-Return only one word: service, booking, or qna."""
-                user_prompt = f"Classify intent: {message}"
+Return 1 word: service/booking/qna"""
+                user_prompt = f"'{message}' →"
             
             # Use LLM to classify intent
             if self.llm_client:
@@ -152,17 +142,18 @@ Return only one word: service, booking, or qna."""
                     llm_response = self.llm_client.generate_response(
                         prompt=combined_prompt,
                         model="gpt-3.5-turbo",  # Use appropriate model
-                        max_tokens=10
+                        max_tokens=5,  # Reduced for faster response
+                        temperature=0.1  # Lower temperature for more consistent results
                     )
-                    # Extract intent from LLM response
+                    # Extract intent from LLM response - optimized parsing
                     intent_response = llm_response.strip().lower() if llm_response else ""
                     
-                    # Validate and map intent
-                    if "service" in intent_response:
+                    # Fast intent mapping with exact matches
+                    if intent_response in ["service", "s"]:
                         state["intent"] = "service"
-                    elif "booking" in intent_response:
+                    elif intent_response in ["booking", "book", "b"]:
                         state["intent"] = "booking"
-                    elif "qna" in intent_response:
+                    elif intent_response in ["qna", "q"]:
                         state["intent"] = "qna"
                     else:
                         # Fallback to qna if LLM response is unclear

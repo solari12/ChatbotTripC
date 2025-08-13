@@ -55,10 +55,10 @@ class TripCAPIClient:
             headers["Authorization"] = f"Bearer {self.access_token}"
         return headers
     
-    async def get_restaurants(self, page: int = 1, page_size: int = 10, 
+    async def get_restaurants(self, page: int = 1, page_size: int = 5, 
                             city: Optional[str] = None, keyword: Optional[str] = None,
                             product_type_id: Optional[int] = None, province_id: Optional[int] = None,
-                            supplier_type_slug: Optional[str] = None) -> List[Service]:
+                            supplier_type_slug: str = "am-thuc") -> List[Service]:
         """Get restaurant services from TripC API with advanced filtering"""
         try:
             params = {
@@ -67,7 +67,9 @@ class TripCAPIClient:
             }
             
             # Add optional filters
-            if city:
+            if city and keyword:
+                params["keyword"] = f"{city} {keyword}"  # Combine city and keyword
+            elif city:
                 params["keyword"] = city  # Use keyword for city search
             elif keyword:
                 params["keyword"] = keyword  # Use keyword for general search
@@ -85,7 +87,13 @@ class TripCAPIClient:
             data = response.json()
             restaurants = []
             
-            for item in data.get("data", []):
+            # Handle case where data is None or doesn't have 'data' key
+            data_items = data.get("data") if data else None
+            if data_items is None:
+                logger.warning(f"No data returned from restaurants API. Response: {data}")
+                return []
+            
+            for item in data_items:
                 # Extract location coordinates
                 location = None
                 if item.get("lat") and item.get("long"):
@@ -101,6 +109,7 @@ class TripCAPIClient:
                     # Image URLs
                     imageUrl=item.get("logo_url"),
                     coverImageUrl=item.get("cover_image_url"),
+                    sealImageUrl=item.get("seal_image_url"),  # Support for culinary passport seal
                     # Ratings & Reviews
                     rating=item.get("rating"),
                     totalReviews=item.get("total_reviews"),
@@ -125,6 +134,128 @@ class TripCAPIClient:
             return []
         except Exception as e:
             logger.error(f"Error getting restaurants: {e}")
+            return []
+    
+    async def get_culinary_passport_suppliers(self, page: int = 1, page_size: int = 100) -> List[Service]:
+        """Get suppliers from Culinary Passport (Hộ chiếu ẩm thực Đà Nẵng)"""
+        try:
+            params = {
+                "page": page,
+                "page_size": page_size
+            }
+            
+            url = f"{self.base_url}/api/culinary-passport/suppliers"
+            response = await self.client.get(url, params=params, headers=self._get_headers())
+            response.raise_for_status()
+            
+            data = response.json()
+            suppliers = []
+            
+            for item in data.get("data", []):
+                # Extract location coordinates
+                location = None
+                if item.get("lat") and item.get("long"):
+                    location = {
+                        "lat": float(item.get("lat")),
+                        "lng": float(item.get("long"))
+                    }
+                
+                supplier = Service(
+                    id=item.get("id"),
+                    name=item.get("name", ""),
+                    type="culinary_passport",
+                    # Image URLs
+                    imageUrl=item.get("logo_url"),
+                    coverImageUrl=item.get("cover_image_url"),
+                    sealImageUrl=item.get("seal_image_url"),  # Special seal for culinary passport
+                    # Ratings & Reviews
+                    rating=item.get("rating"),
+                    totalReviews=item.get("total_reviews"),
+                    # Location & Address
+                    address=item.get("full_address", item.get("address", "")),
+                    city=item.get("city", ""),
+                    # Service Details
+                    productTypes=item.get("product_types", ""),
+                    description=item.get("description", ""),
+                    priceRange=item.get("price_range", ""),
+                    workingHoursDisplay=item.get("working_hours_display", ""),
+                    amenities=item.get("amenities", []),
+                    # Location coordinates
+                    location=location
+                )
+                suppliers.append(supplier)
+            
+            return suppliers
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error getting culinary passport suppliers: {e.response.status_code}")
+            return []
+        except Exception as e:
+            logger.error(f"Error getting culinary passport suppliers: {e}")
+            return []
+    
+    async def get_hotels(self, page: int = 1, page_size: int = 100, 
+                        supplier_type_slug: str = "luu-tru") -> List[Service]:
+        """Get hotel services from TripC API"""
+        try:
+            params = {
+                "page": page,
+                "page_size": page_size,
+                "supplier_type_slug": supplier_type_slug
+            }
+            
+            url = f"{self.base_url}/api/services/hotels"
+            response = await self.client.get(url, params=params, headers=self._get_headers())
+            response.raise_for_status()
+            
+            data = response.json()
+            hotels = []
+            
+            for item in data.get("data", []):
+                # Extract location coordinates
+                location = None
+                if item.get("lat") and item.get("long"):
+                    try:
+                        location = {
+                            "lat": float(item.get("lat")),
+                            "lng": float(item.get("long"))
+                        }
+                    except (ValueError, TypeError):
+                        # Skip invalid coordinates
+                        location = None
+                
+                hotel = Service(
+                    id=item.get("id"),
+                    name=item.get("name", ""),
+                    type="hotel",
+                    # Image URLs
+                    imageUrl=item.get("logo_url"),
+                    coverImageUrl=item.get("cover_image_url"),
+                    sealImageUrl=item.get("seal_image_url"),
+                    # Ratings & Reviews
+                    rating=item.get("rating"),
+                    totalReviews=item.get("total_reviews"),
+                    # Location & Address
+                    address=item.get("full_address", item.get("address", "")),
+                    city=item.get("city", ""),
+                    # Service Details
+                    productTypes=item.get("product_types", ""),
+                    description=item.get("description", ""),
+                    priceRange=item.get("price_range", ""),
+                    workingHoursDisplay=item.get("working_hours_display", ""),
+                    amenities=item.get("amenities", []),
+                    # Location coordinates
+                    location=location
+                )
+                hotels.append(hotel)
+            
+            return hotels
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error getting hotels: {e.response.status_code}")
+            return []
+        except Exception as e:
+            logger.error(f"Error getting hotels: {e}")
             return []
     
     async def get_restaurant_detail(self, restaurant_id: int) -> Optional[Service]:
@@ -192,15 +323,32 @@ class TripCAPIClient:
             logger.error(f"Error getting seating info for {restaurant_id}: {e}")
             return None
     
-    def get_service_sources(self) -> List[Source]:
+    def get_service_sources(self, service_type: str = "restaurant") -> List[Source]:
         """Get metadata sources for service responses"""
-        return [
-            Source(
-                title="TripC API - Nhà hàng Đà Nẵng",
-                url=f"{self.base_url}/api/services/restaurants",
-                imageUrl="https://cdn.tripc.ai/sources/tripc-api.jpg"
-            )
-        ]
+        if service_type == "culinary_passport":
+            return [
+                Source(
+                    title="Hộ chiếu ẩm thực Đà Nẵng",
+                    url=f"{self.base_url}/api/culinary-passport/suppliers",
+                    imageUrl="https://cdn.tripc.ai/sources/culinary-passport.jpg"
+                )
+            ]
+        elif service_type == "hotel":
+            return [
+                Source(
+                    title="TripC API - Khách sạn Đà Nẵng",
+                    url=f"{self.base_url}/api/services/hotels?supplier_type_slug=luu-tru",
+                    imageUrl="https://cdn.tripc.ai/sources/tripc-hotels.jpg"
+                )
+            ]
+        else:  # restaurant or default
+            return [
+                Source(
+                    title="TripC API - Nhà hàng Đà Nẵng",
+                    url=f"{self.base_url}/api/services/restaurants?supplier_type_slug=am-thuc",
+                    imageUrl="https://cdn.tripc.ai/sources/tripc-restaurants.jpg"
+                )
+            ]
     
     async def search_services(self, query: str, service_type: str = "restaurant", 
                             page: int = 1, page_size: int = 10) -> List[Service]:

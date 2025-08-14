@@ -5,6 +5,7 @@ Replaces the traditional orchestrator with a visual workflow
 """
 
 from typing import Dict, Any, Optional, TypedDict
+import re
 from langgraph.graph import StateGraph, END
 
 from ..models.platform_models import PlatformContext, PlatformType, DeviceType, LanguageType
@@ -587,6 +588,12 @@ Return only: service or booking or qna"""
             conversation_id = getattr(request, "conversationId", None) or "default"
             self.memory.add_turn(conversation_id, "user", request.message)
 
+            # Update persistent user entities (name/email/phone) from the latest message
+            try:
+                self._update_user_entities_from_message(conversation_id, request.message)
+            except Exception:
+                pass
+
             # Run the workflow
             result = await self.workflow.ainvoke(initial_state)
             
@@ -653,3 +660,30 @@ Return only: service or booking or qna"""
                 }
             ]
         }
+
+    def _update_user_entities_from_message(self, conversation_id: str, message: str) -> None:
+        """Lightweight extraction of user-level entities and store to memory for reuse across flows."""
+        text = message or ""
+        entities_update: Dict[str, Any] = {}
+
+        # Email
+        m = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", text)
+        if m:
+            entities_update["user_email"] = m.group(0)
+
+        # Phone (basic)
+        m = re.search(r"\+?\d{9,13}", text.replace(" ", ""))
+        if m:
+            entities_update["user_phone"] = m.group(0)
+
+        # Name via label "Tên:" or statements "Tôi là/ I am / My name is"
+        m = re.search(r"(tên|name)\s*:\s*([^,\n\r]{2,})", text, flags=re.IGNORECASE)
+        if m:
+            entities_update["user_name"] = m.group(2).strip()
+        else:
+            m = re.search(r"(tôi là|toi la|my name is|i am)\s+([^,\n\r]{2,})", text, flags=re.IGNORECASE)
+            if m:
+                entities_update["user_name"] = m.group(2).strip()
+
+        if entities_update:
+            self.memory.set_entities(conversation_id, entities_update)

@@ -48,6 +48,14 @@ class BookingAgent:
 
             # Use last mentioned place from memory if available
             entities = self.memory.get_entities(conversation_id)
+            # Pre-fill contact from user-level entities
+            if entities.get("user_name") and not state.get("name"):
+                state["name"] = entities.get("user_name")
+            if entities.get("user_email") and not state.get("email"):
+                state["email"] = entities.get("user_email")
+            if entities.get("user_phone") and not state.get("phone"):
+                state["phone"] = entities.get("user_phone")
+
             last_place = entities.get("current_place") or entities.get("last_mentioned_place")
             if last_place:
                 state["restaurant"] = last_place
@@ -400,6 +408,14 @@ class BookingAgent:
         # Ask in priority order
         if missing:
             first = missing[0]
+
+            # Try LLM to craft a short, natural, personalized question
+            llm_q = self._llm_personalized_next_question(state, first, lang)
+            if llm_q:
+                return llm_q
+
+            # Fallback static prompts with light personalization
+            prefix = self._personalized_prefix(state, lang)
             if lang == "vi":
                 prompts = {
                     "restaurant": "Bạn muốn đặt ở NHÀ HÀNG/ĐỊA ĐIỂM nào?",
@@ -418,33 +434,19 @@ class BookingAgent:
                     "phone": "Please share your PHONE NUMBER for confirmation.",
                     "email": "Please provide your EMAIL to receive confirmation.",
                 }
-            return prompts.get(first, prompts["restaurant"])  # safe default
+            core = prompts.get(first, prompts["restaurant"])  # safe default
+            return (f"{prefix} {core}" if prefix else core)
 
         # If everything in priority list is filled but not confirmed yet
+        summary = self._compose_summary_message(state, lang)
         if lang == "vi":
-            to_fill = []
-            if not state.get("restaurant"):
-                to_fill.append("nhà hàng bạn muốn đặt")
-            if not state.get("party_size"):
-                to_fill.append("số người")
-            if not state.get("time"):
-                to_fill.append("thời gian")
-            if to_fill:
-                return "Mình có thể biết " + ", ".join(to_fill) + " không? Bạn có thể trả lời tự nhiên."
-            summary = self._compose_summary_message(state, lang)
-            return f"Mình đã ghi nhận: {summary}. Bạn nhập 'chốt' hoặc 'xác nhận' để gửi yêu cầu nhé."
+            prefix = self._personalized_prefix(state, lang)
+            core = f"Mình đã ghi nhận: {summary}. Bạn nhập 'chốt' hoặc 'xác nhận' để gửi yêu cầu nhé."
+            return (f"{prefix} {core}" if prefix else core)
         else:
-            to_fill = []
-            if not state.get("restaurant"):
-                to_fill.append("restaurant name")
-            if not state.get("party_size"):
-                to_fill.append("party size")
-            if not state.get("time"):
-                to_fill.append("time")
-            if to_fill:
-                return "Could you tell me the " + ", ".join(to_fill) + "? You can answer naturally."
-            summary = self._compose_summary_message(state, lang)
-            return f"I have: {summary}. Type 'confirm' to submit."
+            prefix = self._personalized_prefix(state, lang)
+            core = f"I have: {summary}. Type 'confirm' to submit."
+            return (f"{prefix} {core}" if prefix else core)
 
     def _is_ask_aligned(self, ask: str, target_field: str, lang: str) -> bool:
         text = (ask or "").lower()
@@ -461,6 +463,53 @@ class BookingAgent:
         if target_field == "email":
             return "email" in text
         return False
+
+    def _personalized_prefix(self, state: Dict[str, Any], lang: str) -> str:
+        name = (state.get("name") or "").strip()
+        if not name:
+            return ""
+        # Prefer last token as first-name style
+        first_name = name.split()[-1]
+        if lang == "vi":
+            return f"Chào {first_name},"
+        return f"Hi {first_name},"
+
+    def _llm_personalized_next_question(self, state: Dict[str, Any], target_field: str, lang: str) -> Optional[str]:
+        try:
+            if not self.llm_client or not self.llm_client.is_configured():
+                return None
+            known = {
+                "name": state.get("name"),
+                "email": state.get("email"),
+                "phone": state.get("phone"),
+                "restaurant": state.get("restaurant"),
+                "party_size": state.get("party_size"),
+                "time": state.get("time"),
+            }
+            if lang == "vi":
+                system = (
+                    "Bạn là trợ lý đặt chỗ thân thiện. Viết MỘT câu hỏi ngắn, tự nhiên bằng tiếng Việt để hỏi trường còn thiếu:"
+                    f" {target_field}. Nếu đã biết tên, hãy xưng hô thân thiện (ví dụ: 'Chào Tuấn, ...'). "
+                    "Chỉ trả về đúng câu hỏi, không thêm ký hiệu hay giải thích."
+                )
+                user = f"Thông tin đã biết: {known}. Hãy tạo câu hỏi."
+            else:
+                system = (
+                    "You are a friendly booking assistant. Write ONE short, natural question in English to ask for the missing field:"
+                    f" {target_field}. If name is known, greet by first name (e.g., 'Hi John, ...'). "
+                    "Return the question only."
+                )
+                user = f"Known info: {known}. Generate question."
+            prompt = f"System: {system}\n\nUser: {user}"
+            out = self.llm_client.generate_response(prompt, max_tokens=60, temperature=0.3)
+            if out:
+                q = out.strip().strip('"')
+                # Basic guard: ensure it references the target field semantically
+                if self._is_ask_aligned(q, target_field, lang):
+                    return q
+            return None
+        except Exception:
+            return None
 
     def _next_suggestions(self, missing: Tuple[str, ...], lang: str) -> list[Suggestion]:
         if lang == "vi":

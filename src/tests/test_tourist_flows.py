@@ -40,11 +40,10 @@ def test_qna_museum_da_nang():
     assert _ok(resp)
     if resp.status_code == 200:
         data = resp.json()
-        # In unit test env without external services, endpoint may return type="Error"
-        assert data.get("type") in ("QnA", "Service", "Error")
+        assert data.get("type") in ("QnA", "Service")
         assert isinstance(data.get("answerAI", ""), str)
-        # CTA or suggestions (optional in Error)
-        assert data.get("cta") is None or isinstance(data.get("cta"), dict) or data.get("suggestions") is not None
+        # CTA or suggestions should be present for web
+        assert data.get("cta") or data.get("suggestions") is not None
 
 
 def test_followup_pronoun_resolution():
@@ -69,7 +68,7 @@ def test_followup_pronoun_resolution():
     assert _ok(r2)
     if r2.status_code == 200:
         d2 = r2.json()
-        assert d2.get("type") in ("QnA", "Service", "Error")
+        assert d2.get("type") in ("QnA", "Service")
         assert isinstance(d2.get("answerAI", ""), str)
 
 
@@ -84,7 +83,7 @@ def test_discover_restaurants_near_dragon_bridge():
     assert _ok(resp)
     if resp.status_code == 200:
         data = resp.json()
-        assert data.get("type") in ("Service", "QnA", "Error")  # Allow Error in unit env
+        assert data.get("type") in ("Service", "QnA")  # Service preferred, but allow QnA fallback
         if data.get("type") == "Service":
             assert isinstance(data.get("services", []), list)
 
@@ -100,7 +99,7 @@ def test_discover_hotels_da_nang():
     assert _ok(resp)
     if resp.status_code == 200:
         data = resp.json()
-        assert data.get("type") in ("Service", "QnA", "Error")
+        assert data.get("type") in ("Service", "QnA")
         if data.get("type") == "Service":
             assert isinstance(data.get("services", []), list)
 

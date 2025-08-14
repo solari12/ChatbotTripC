@@ -1,8 +1,9 @@
 from typing import List, Optional, Dict, Any
 from ..models.schemas import ServiceResponse, Service, Source, Suggestion
 from ..services.tripc_api import TripCAPIClient
+from ..services.keyword_analyzer import KeywordAnalyzer
 from ..core.platform_context import PlatformContext
-from ..llm.open_client import OpenAIClient
+from ..llm.rate_limited_client import RateLimitedLLMClient
 import logging
 
 logger = logging.getLogger(__name__)
@@ -11,19 +12,28 @@ logger = logging.getLogger(__name__)
 class ServiceAgent:
     """Service Agent for TripC API integration with app-first policy and LLM-powered responses"""
     
-    def __init__(self, tripc_client: TripCAPIClient, llm_client: OpenAIClient = None):
+    def __init__(self, tripc_client: TripCAPIClient, llm_client: RateLimitedLLMClient = None):
         self.tripc_client = tripc_client
-        self.llm_client = llm_client or OpenAIClient()  # Auto-create if not provided
+        self.llm_client = llm_client
+        if llm_client is None:
+            from ..llm.open_client import OpenAIClient
+            base_llm_client = OpenAIClient()
+            self.llm_client = RateLimitedLLMClient(base_llm_client)
+        self.keyword_analyzer = KeywordAnalyzer(self.llm_client, self.tripc_client)
         
         # Service type mappings with comprehensive keywords
         self.service_keywords = {
             "restaurant": [
                 "nhà hàng", "quán ăn", "đồ ăn", "ẩm thực", "restaurant", "food", "dining",
-                "ăn", "bữa", "món", "nấu", "chế biến", "thực phẩm", "đồ uống", "cafe", "bar"
+                "ăn", "bữa", "món", "nấu", "chế biến", "thực phẩm", "đồ uống", "cafe", "bar",
+                "bún", "phở", "bánh", "mì", "cơm", "lẩu", "nướng", "hải sản", "việt nam",
+                "nhậu", "quán nhậu", "craft beer"
             ],
             "culinary_passport": [
                 "hộ chiếu ẩm thực", "culinary passport", "hộ chiếu", "passport", 
-                "ẩm thực đà nẵng", "da nang culinary", "đặc sản đà nẵng"
+                "ẩm thực đà nẵng", "da nang culinary", "đặc sản đà nẵng",
+                "bún", "phở", "bánh", "mì", "lẩu", "nướng", "hải sản", "việt nam",
+                "seal", "con dấu", "chứng nhận", "certified"
             ],
             "hotel": [
                 "khách sạn", "nơi ở", "accommodation", "hotel", "lodging", "resort",
@@ -46,32 +56,31 @@ class ServiceAgent:
             
             # Get services from TripC API based on service type with LLM-extracted parameters
             if service_type == "restaurant":
-                # Use general restaurants API with am-thuc filter and smart parameters
-                # Get more pages if we need variety for filtering
-                llm_context = search_params.get("llm_context", {})
-                # Fetch more pages when we lack clear filters to avoid repetitive first-page items
-                needs_variety = (
-                    not (search_params.get("city") or search_params.get("keyword"))
-                    or any(llm_context.get(key) for key in ["atmosphere", "price_range", "special_features"])
-                )
-                
-                if needs_variety:
-                    # Get from multiple pages for better variety
-                    all_services = []
-                    for page in [1, 2, 3]:
-                        page_services = await self.tripc_client.get_restaurants(
-                            page=page, 
+                # Use KeywordAnalyzer for intelligent restaurant search
+                try:
+                    search_result = await self.keyword_analyzer.search_restaurants_with_analysis(
+                        user_query=query,
+                        page=1,
+                        page_size=15
+                    )
+                    services = search_result["restaurants"]
+                    
+                    # If no results from KeywordAnalyzer, fallback to old method
+                    if not services:
+                        logger.warning("No results from KeywordAnalyzer, using fallback method")
+                        services = await self.tripc_client.get_restaurants(
+                            page=1, 
                             page_size=10,
                             city=search_params.get("city"),
                             keyword=search_params.get("keyword"),
                             supplier_type_slug="am-thuc"
                         )
-                        all_services.extend(page_services)
-                        if len(all_services) >= 30:  # Enough for filtering
-                            break
-                    services = all_services
-                else:
-                    # Standard single page request
+                        # Limit fallback results to 5
+                        services = services[:5]
+                    
+                except Exception as e:
+                    logger.error(f"Error using KeywordAnalyzer: {e}")
+                    # Fallback to old method
                     services = await self.tripc_client.get_restaurants(
                         page=1, 
                         page_size=10,
@@ -79,28 +88,20 @@ class ServiceAgent:
                         keyword=search_params.get("keyword"),
                         supplier_type_slug="am-thuc"
                     )
-                
-                # Apply LLM context filtering and de-duplicate by name/address
-                services = self._filter_services_by_llm_context(services, llm_context)
-                if services:
-                    unique = {}
-                    for s in services:
-                        key = (s.name or "").strip().lower() + "|" + (s.address or "").strip().lower()
-                        if key not in unique:
-                            unique[key] = s
-                    services = list(unique.values())
-                    # Prefer higher rating if available
-                    services.sort(key=lambda x: (x.rating is not None, x.rating or 0), reverse=True)
-                
-                # Limit to 5 best matches
-                services = services[:5]
+                    services = services[:5]
             elif service_type == "culinary_passport":
-                # Use culinary passport suppliers API with LLM parameters
+                # Use culinary passport suppliers API with keyword and product_type filtering
+                keyword = search_params.get("keyword")
+                product_type_id = search_params.get("product_type_id")
+                
                 services = await self.tripc_client.get_culinary_passport_suppliers(
                     page=1,
-                    page_size=20  # Get more for better filtering
+                    page_size=20,  # Get more for better filtering
+                    keyword=keyword,
+                    product_type_id=product_type_id
                 )
-                # Apply LLM context filtering
+                
+                # Apply LLM context filtering for additional refinement
                 services = self._filter_services_by_llm_context(services, search_params.get("llm_context", {}))
                 
                 # Filter by location if specified
@@ -268,7 +269,9 @@ Loại dịch vụ: {service_type_vi}
 Dịch vụ phù hợp:
 {self._format_services_for_prompt(services, language)}
 
-Trả lời bằng tiếng Việt, tự nhiên, thân thiện, dưới 80 từ. Giới thiệu về {service_type_vi} và nhắc người dùng tải app TripC để xem chi tiết."""
+Trả lời bằng tiếng Việt, tự nhiên, thân thiện, dưới 100 từ. Giới thiệu về {service_type_vi} và nhắc người dùng tải app TripC để xem chi tiết.
+
+QUAN TRỌNG: Nếu đây là tìm kiếm nhà hàng (restaurant), hãy kết thúc câu trả lời bằng: "Bạn cũng có thể tham khảo Hộ chiếu ẩm thực Đà Nẵng để tìm những nhà hàng được chứng nhận chất lượng cao!"."""
             else:
                 service_type_en = self._get_service_type_english(service_type)
                 prompt = f"""You are TripC.AI, an intelligent travel assistant.
@@ -279,10 +282,12 @@ Service type: {service_type_en}
 Matching services:
 {self._format_services_for_prompt(services, language)}
 
-Respond in English, naturally, friendly, under 80 words. Introduce {service_type_en} and remind user to download TripC app for details."""
+Respond in English, naturally, friendly, under 100 words. Introduce {service_type_en} and remind user to download TripC app for details.
+
+IMPORTANT: If this is a restaurant search, end your response with: "You can also check out the Da Nang Culinary Passport for certified high-quality restaurants!"."""
             
             # Generate response using LLM
-            llm_response = self.llm_client.generate_response(prompt, max_tokens=150)
+            llm_response = self.llm_client.generate_response_sync(prompt, max_tokens=150)
             
             if llm_response:
                 return llm_response
@@ -312,7 +317,9 @@ Người dùng tìm kiếm nhà hàng tại {location}
 Nhà hàng nổi bật:
 {self._format_services_for_prompt(services, language)}
 
-Trả lời bằng tiếng Việt, tự nhiên, thân thiện, dưới 80 từ. Giới thiệu ẩm thực {location} và nhắc tải app TripC để đặt bàn."""
+Trả lời bằng tiếng Việt, tự nhiên, thân thiện, dưới 100 từ. Giới thiệu ẩm thực {location} và nhắc tải app TripC để đặt bàn.
+
+QUAN TRỌNG: Kết thúc câu trả lời bằng: "Bạn cũng có thể tham khảo Hộ chiếu ẩm thực Đà Nẵng để tìm những nhà hàng được chứng nhận chất lượng cao!"."""
             else:
                 location = city if city else "Da Nang"
                 prompt = f"""You are TripC.AI, an intelligent travel assistant.
@@ -322,10 +329,12 @@ User looking for restaurants in {location}
 Featured restaurants:
 {self._format_services_for_prompt(services, language)}
 
-Respond in English, naturally, friendly, under 80 words. Introduce {location} cuisine and remind to download TripC app for booking."""
+Respond in English, naturally, friendly, under 100 words. Introduce {location} cuisine and remind to download TripC app for booking.
+
+IMPORTANT: End your response with: "You can also check out the Da Nang Culinary Passport for certified high-quality restaurants!"."""
             
             # Generate response using LLM
-            llm_response = self.llm_client.generate_response(prompt, max_tokens=150)
+            llm_response = self.llm_client.generate_response_sync(prompt, max_tokens=150)
             
             if llm_response:
                 return llm_response
@@ -420,7 +429,20 @@ Respond in English, naturally, friendly, under 80 words. Introduce {location} cu
                     label="Đặt chỗ ngay",
                     detail="Đặt bàn tại nhà hàng yêu thích",
                     action="collect_user_info"
-                ),
+                )
+            ]
+            
+            # Thêm suggestion về hộ chiếu ẩm thực cho restaurant
+            if service_type == "restaurant":
+                suggestions.append(
+                    Suggestion(
+                        label="Hộ chiếu ẩm thực",
+                        detail="Khám phá nhà hàng được chứng nhận chất lượng",
+                        action="show_culinary_passport"
+                    )
+                )
+            
+            suggestions.extend([
                 Suggestion(
                     label="Xem thêm dịch vụ",
                     detail="Khám phá các dịch vụ khác",
@@ -431,14 +453,27 @@ Respond in English, naturally, friendly, under 80 words. Introduce {location} cu
                     detail="Tìm kiếm với tiêu chí khác",
                     action="search_services"
                 )
-            ]
+            ])
         else:
             suggestions = [
                 Suggestion(
                     label="Book now",
                     detail="Make a reservation at your favorite restaurant",
                     action="collect_user_info"
-                ),
+                )
+            ]
+            
+            # Thêm suggestion về hộ chiếu ẩm thực cho restaurant
+            if service_type == "restaurant":
+                suggestions.append(
+                    Suggestion(
+                        label="Culinary Passport",
+                        detail="Explore certified quality restaurants",
+                        action="show_culinary_passport"
+                    )
+                )
+            
+            suggestions.extend([
                 Suggestion(
                     label="View more services",
                     detail="Explore other services",
@@ -449,7 +484,7 @@ Respond in English, naturally, friendly, under 80 words. Introduce {location} cu
                     detail="Search with different criteria",
                     action="search_services"
                 )
-            ]
+            ])
         
         return suggestions
     
@@ -616,6 +651,7 @@ Hãy phân tích và trích xuất các thông tin sau (trả về JSON):
   "location": "tên thành phố (ví dụ: đà nẵng, hội an, hà nội)",
   "cuisine_type": "loại ẩm thực (ví dụ: hải sản, việt nam, nhật bản, hàn quốc, ý, pháp, trung quốc, thái, chay)",
   "keyword": "từ khóa chính để tìm kiếm (tên món ăn, tên nhà hàng, đặc điểm)",
+  "product_type_id": "ID loại sản phẩm phù hợp nhất (chọn từ danh sách dưới đây)",
   "price_range": "mức giá (rẻ/trung bình/đắt)",
   "rating_preference": "có yêu cầu đánh giá cao không (true/false)",
   "atmosphere": "không khí (lãng mạn, gia đình, công sở, casual)",
@@ -623,7 +659,28 @@ Hãy phân tích và trích xuất các thông tin sau (trả về JSON):
   "special_features": "yêu cầu đặc biệt (view đẹp, gần biển, có chỗ đậu xe)"
 }}
 
-Chỉ trích xuất thông tin có trong câu hỏi. Nếu không có thông tin nào thì để null."""
+Danh sách Product Type ID:
+- 22: Quán nhậu/Craft beer (nhậu, bia, craft beer, pub)
+- 77: Bún/Phở (bún, phở, mì)
+- 89: Bánh Mì/Xôi (bánh mì, xôi)
+- 78: Mì Quảng (mì quảng)
+- 20: Lẩu nướng (lẩu, nướng, bbq)
+- 93: Hải Sản (hải sản, seafood, tôm, cua, cá)
+- 80: Ẩm thực Việt Nam (việt nam, vietnamese)
+- 62: Ẩm thực Nhật (nhật, japanese, sushi, sashimi, ramen)
+- 23: Ẩm thực Hàn (hàn, korean, bbq)
+- 63: Ẩm thực Trung (trung, chinese, dimsum)
+- 98: Ẩm thực Thái (thái, thai)
+- 90: Ẩm thực Pháp (pháp, french)
+- 67: Italian (ý, italy, pizza, pasta)
+- 26: Ẩm thực Chay (chay, vegetarian)
+- 8: Cafe (cafe, coffee, cà phê)
+- 12: Trà sữa (trà sữa, milk tea)
+- 15: Dessert (dessert, tráng miệng)
+- 10: Fast Food (fast food, đồ ăn nhanh)
+- 25: Buffet (buffet, tiệc)
+
+Chỉ trích xuất thông tin có trong câu hỏi. Nếu không có thông tin nào thì để null. Chọn product_type_id phù hợp nhất dựa trên từ khóa trong câu hỏi."""
             else:
                 prompt = f"""You are an assistant for analyzing restaurant search queries.
 
@@ -634,6 +691,7 @@ Please analyze and extract the following information (return JSON):
   "location": "city name (e.g., da nang, hoi an, hanoi)",
   "cuisine_type": "cuisine type (e.g., seafood, vietnamese, japanese, korean, italian, french, chinese, thai, vegetarian)",
   "keyword": "main search keyword (dish name, restaurant name, features)",
+  "product_type_id": "most suitable product type ID (choose from list below)",
   "price_range": "price level (cheap/moderate/expensive)",
   "rating_preference": "requires high rating (true/false)",
   "atmosphere": "atmosphere (romantic, family, business, casual)",
@@ -641,7 +699,28 @@ Please analyze and extract the following information (return JSON):
   "special_features": "special requirements (good view, near beach, parking)"
 }}
 
-Only extract information present in the query. Use null if not mentioned."""
+Product Type ID List:
+- 22: Craft beer/Pub (beer, craft beer, pub)
+- 77: Pho/Noodles (pho, noodles, bun)
+- 89: Banh Mi/Sticky Rice (banh mi, sticky rice)
+- 78: Mi Quang (mi quang)
+- 20: Hotpot/Grill (hotpot, grill, bbq)
+- 93: Seafood (seafood, fish, shrimp, crab)
+- 80: Vietnamese Cuisine (vietnamese, vietnam)
+- 62: Japanese Cuisine (japanese, sushi, sashimi, ramen)
+- 23: Korean Cuisine (korean, bbq)
+- 63: Chinese Cuisine (chinese, dimsum)
+- 98: Thai Cuisine (thai)
+- 90: French Cuisine (french)
+- 67: Italian (italian, pizza, pasta)
+- 26: Vegetarian (vegetarian, vegan)
+- 8: Cafe (cafe, coffee)
+- 12: Milk Tea (milk tea, bubble tea)
+- 15: Dessert (dessert)
+- 10: Fast Food (fast food)
+- 25: Buffet (buffet)
+
+Only extract information present in the query. Use null if not mentioned. Choose the most suitable product_type_id based on keywords in the query."""
             
             # Use LLM to analyze query
             llm_response = await self._call_llm_for_analysis(prompt)
@@ -664,18 +743,17 @@ Only extract information present in the query. Use null if not mentioned."""
         """Call LLM for query analysis"""
         try:
             # Use existing LLM client if available; else create one
-            llm_client = self.llm_client or OpenAIClient()
-            if not llm_client.is_configured():
+            if not self.llm_client or not self.llm_client.is_configured():
                 # Return simple fallback JSON if no LLM available
-                return '{"location": null, "cuisine_type": null, "keyword": null, "price_range": null, "rating_preference": null, "atmosphere": null, "meal_time": null, "special_features": null}'
+                return '{"location": null, "cuisine_type": null, "keyword": null, "product_type_id": null, "price_range": null, "rating_preference": null, "atmosphere": null, "meal_time": null, "special_features": null}'
             
-            response = llm_client.generate_response(prompt, max_tokens=256, temperature=0.3)
-            return response or '{"location": null, "cuisine_type": null, "keyword": null, "price_range": null, "rating_preference": null, "atmosphere": null, "meal_time": null, "special_features": null}'
+            response = self.llm_client.generate_response_sync(prompt, max_tokens=256, temperature=0.3)
+            return response or '{"location": null, "cuisine_type": null, "keyword": null, "product_type_id": null, "price_range": null, "rating_preference": null, "atmosphere": null, "meal_time": null, "special_features": null}'
             
         except Exception as e:
             logger.error(f"Error calling LLM for analysis: {e}")
             # Return fallback JSON
-            return '{"location": null, "cuisine_type": null, "keyword": null, "price_range": null, "rating_preference": null, "atmosphere": null, "meal_time": null, "special_features": null}'
+            return '{"location": null, "cuisine_type": null, "keyword": null, "product_type_id": null, "price_range": null, "rating_preference": null, "atmosphere": null, "meal_time": null, "special_features": null}'
     
     def _convert_llm_params_to_api_params(self, llm_params: Dict[str, Any]) -> Dict[str, Any]:
         """Convert LLM extracted parameters to API parameters"""
@@ -701,6 +779,15 @@ Only extract information present in the query. Use null if not mentioned."""
             keywords.append(llm_params["keyword"])
         if keywords:
             api_params["keyword"] = " ".join(keywords)
+        
+        # Product Type ID from LLM
+        if llm_params.get("product_type_id"):
+            try:
+                product_type_id = int(llm_params["product_type_id"])
+                api_params["product_type_id"] = product_type_id
+            except (ValueError, TypeError):
+                # If LLM returns invalid product_type_id, ignore it
+                pass
         
         # Additional context for filtering
         api_params["llm_context"] = {
@@ -818,27 +905,140 @@ Only extract information present in the query. Use null if not mentioned."""
                 api_params["city"] = city
                 break
         
-        # Cuisine type extraction with keyword combinations
+        # Cuisine type extraction with keyword combinations and product_type_id mapping
         cuisine_mapping = {
             "hải sản": ["hải sản", "seafood", "tôm", "cua", "cá", "sò", "ốc"],
-            "việt nam": ["việt nam", "vietnamese", "phở", "bún", "bánh", "mì quảng", "bánh xèo"],
-            "nhật bản": ["nhật", "japanese", "sushi", "sashimi", "ramen", "udon"],
+            "việt nam": ["việt nam", "vietnamese", "phở", "bún", "bánh mì", "mì quảng", "bánh xèo", "chả cá"],
+            "đà nẵng": ["đà nẵng", "da nang", "mì quảng"],
+            "nhật bản": ["nhật", "japanese", "sushi", "sashimi", "ramen", "udon", "izakaya", "omakase"],
             "hàn quốc": ["hàn", "korean", "bbq", "kimchi", "bulgogi"],
             "trung quốc": ["trung quốc", "chinese", "dimsum", "mì xào"],
             "ý": ["ý", "italy", "italian", "pizza", "pasta"],
             "pháp": ["pháp", "french"],
             "thái": ["thái", "thai", "tom yum", "pad thai"],
-            "chay": ["chay", "vegetarian", "vegan", "healthy"]
+            "chay": ["chay", "vegetarian", "vegan", "healthy"],
+            "âu": ["âu", "european", "món âu"],
+            "fusion": ["fusion"],
+            "halal": ["halal"],
+            "ấn độ": ["ấn độ", "india"],
+            "trung đông": ["trung đông", "middle east"],
+            "nhậu": ["nhậu", "quán nhậu", "craft beer", "beer", "bia"]
         }
         
-        # Build keyword from detected cuisine
+        # Product type ID mapping for culinary passport (từ all_product_types.json)
+        product_type_mapping = {
+            # Món Việt Nam
+            "bún": 77,  # Bún/Phở
+            "phở": 77,  # Bún/Phở
+            "bánh mì": 89,  # Bánh Mì/Xôi
+            "xôi": 89,  # Bánh Mì/Xôi
+            "mì quảng": 78,  # Mì Quảng
+            "lẩu": 20,  # Lẩu nướng
+            "nướng": 20,  # Lẩu nướng
+            "lẩu hấp": 73,  # Lẩu hấp thủy nhiệt
+            "chả cá": 86,  # Chả Cá
+            "beef steak": 36,  # Beef Steak
+            
+            # Ẩm thực các nước
+            "việt nam": 80,  # Ẩm thực Việt Nam
+            "việt": 25,  # Ẩm thực Việt
+            "đà nẵng": 76,  # Ẩm thực Đà Nẵng
+            "nhật": 62,  # Ẩm thực Nhật
+            "japanese": 62,  # Ẩm thực Nhật
+            "hàn": 23,  # Ẩm thực Hàn
+            "korean": 23,  # Ẩm thực Hàn
+            "trung": 63,  # Ẩm thực Trung
+            "chinese": 63,  # Ẩm thực Trung
+            "thái": 98,  # Ẩm thực Thái Lan
+            "thai": 98,  # Ẩm thực Thái Lan
+            "pháp": 90,  # Ẩm thực Pháp
+            "french": 90,  # Ẩm thực Pháp
+            "ý": 67,  # Italian
+            "italy": 67,  # Italian
+            "italian": 67,  # Italian
+            "âu": 82,  # Ẩm thực Âu
+            "european": 82,  # Ẩm thực Âu
+            "món âu": 75,  # Món Âu
+            "fusion": 91,  # Ẩm thực Fusion
+            "halal": 102,  # Ẩm thực Halal
+            "ấn độ": 100,  # Ẩm thực Ấn Độ
+            "india": 100,  # Ẩm thực Ấn Độ
+            "trung đông": 101,  # Ẩm thực Trung Đông
+            "middle east": 101,  # Ẩm thực Trung Đông
+            
+            # Loại món ăn
+            "hải sản": 93,  # Hải Sản
+            "seafood": 93,  # Hải Sản
+            "chay": 26,  # Ẩm thực Chay
+            "vegetarian": 26,  # Ẩm thực Chay
+            "healthy": 37,  # Healthy Food
+            "healthy food": 37,  # Healthy Food
+            "pizza": 92,  # Pizza
+            "pasta": 104,  # Pizza/Pasta
+            "bbq": 38,  # BBQ Grilled
+            "grilled": 38,  # BBQ Grilled
+            "buffet": 97,  # Buffet
+            "fine dining": 54,  # Fine Dining
+            "omakase": 61,  # Omakase
+            "bakery": 103,  # Bakery
+            "drinks": 83,  # Drinks
+            "coffee": 49,  # Coffee
+            "tea": 60,  # Tea Art
+            "craft beer": 39,  # Craft Beer
+            "liquor": 42,  # Liquor
+            "bar": 41,  # Bar
+            "lounge": 44,  # Lounge
+            "hidden bar": 43,  # Hidden Bar
+            "rooftop": 53,  # Rooftop
+            "bistro": 59,  # Bistro
+            "take away": 56,  # Take Away
+            "catering": 55,  # Catering
+            "event party": 57,  # Event Party
+            "wedding party": 45,  # Wedding Party
+            "brunch": 68,  # Brunch
+            "dine": 51,  # Dine
+            "cafe": 31,  # Cafe - Trà sữa - Nước ép
+            "trà sữa": 31,  # Cafe - Trà sữa - Nước ép
+            "nước ép": 31,  # Cafe - Trà sữa - Nước ép
+            "milk tea": 105,  # Milk Tea/ Fruit Tea
+            "fruit tea": 105,  # Milk Tea/ Fruit Tea
+            "karaoke": 33,  # Karaoke
+            "massage": 34,  # Massage
+            "spa": 35,  # Spa - Chăm sóc cơ thể
+            "nails": 48,  # Nails
+            "vui chơi": 70,  # Vui chơi
+            "tham quan": 69,  # Tham quan
+            "du lịch tâm linh": 72,  # Du lịch Tâm linh
+            "michelin": 65,  # Michelin Selected
+            "bib gourmand": 88,  # Bib Gourmand
+            "izakaya": 40,  # Izakaya
+            "german": 58,  # German Cuisine
+            "nhà hàng": 30,  # Nhà hàng
+            "quán nhậu": 22,  # Quán nhậu/Craft beer
+            "nhậu": 22,  # Quán nhậu/Craft beer
+            "craft beer": 22,  # Quán nhậu/Craft beer
+        }
+        
+        # Build keyword from detected cuisine and product_type_id
         keywords = []
         llm_context = {}
+        detected_product_type_id = None
         
         for cuisine, cuisine_keywords in cuisine_mapping.items():
             if any(keyword in query_lower for keyword in cuisine_keywords):
                 keywords.append(cuisine)
                 llm_context["cuisine_type"] = cuisine
+                # Map to product_type_id if available
+                if cuisine in product_type_mapping:
+                    detected_product_type_id = product_type_mapping[cuisine]
+                break
+        
+        # Check for specific dish keywords and map to product_type_id
+        for dish, product_id in product_type_mapping.items():
+            if dish in query_lower:
+                keywords.append(dish)
+                detected_product_type_id = product_id
+                llm_context["specific_dish"] = dish
                 break
         
         # Price range detection
@@ -899,6 +1099,10 @@ Only extract information present in the query. Use null if not mentioned."""
             api_params["keyword"] = " ".join(keywords)
         elif detected_type and llm_context.get("cuisine_type"):
             api_params["keyword"] = llm_context["cuisine_type"]
+        
+        # Add product_type_id if detected
+        if detected_product_type_id:
+            api_params["product_type_id"] = detected_product_type_id
         
         # Add LLM context for filtering
         if llm_context:

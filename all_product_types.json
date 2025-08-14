@@ -1,0 +1,326 @@
+[
+  {
+    "id": 72,
+    "name": "Du lịch Tâm linh"
+  },
+  {
+    "id": 103,
+    "name": "Bakery"
+  },
+  {
+    "id": 60,
+    "name": "Tea Art"
+  },
+  {
+    "id": 93,
+    "name": "Hải Sản"
+  },
+  {
+    "id": 82,
+    "name": "Ẩm thực Âu"
+  },
+  {
+    "id": 86,
+    "name": "Chả Cá"
+  },
+  {
+    "id": 56,
+    "name": "Take Away"
+  },
+  {
+    "id": 69,
+    "name": "Tham quan"
+  },
+  {
+    "id": 78,
+    "name": "Mì Quảng"
+  },
+  {
+    "id": 101,
+    "name": "Ẩm thực Trung Đông"
+  },
+  {
+    "id": 75,
+    "name": "Món Âu"
+  },
+  {
+    "id": 83,
+    "name": "Drinks"
+  },
+  {
+    "id": 68,
+    "name": "Brunch"
+  },
+  {
+    "id": 92,
+    "name": "Pizza"
+  },
+  {
+    "id": 53,
+    "name": "Rooftop"
+  },
+  {
+    "id": 58,
+    "name": "German Cuisine"
+  },
+  {
+    "id": 26,
+    "name": "Ẩm thực Chay"
+  },
+  {
+    "id": 88,
+    "name": "Bib Gourmand"
+  },
+  {
+    "id": 104,
+    "name": "Pizza/Pasta"
+  },
+  {
+    "id": 28,
+    "name": "Ẩm thực Âu"
+  },
+  {
+    "id": 44,
+    "name": "Lounge"
+  },
+  {
+    "id": 73,
+    "name": "Lẩu hấp thủy nhiệt"
+  },
+  {
+    "id": 39,
+    "name": "Craft Beer"
+  },
+  {
+    "id": 98,
+    "name": "Ẩm thực Thái Lan"
+  },
+  {
+    "id": 67,
+    "name": "Italian"
+  },
+  {
+    "id": 65,
+    "name": "Michelin Selected"
+  },
+  {
+    "id": 57,
+    "name": "Event Party"
+  },
+  {
+    "id": 55,
+    "name": "Catering"
+  },
+  {
+    "id": 97,
+    "name": "Buffet"
+  },
+  {
+    "id": 40,
+    "name": "Izakaya"
+  },
+  {
+    "id": 80,
+    "name": "Ẩm thực Việt Nam"
+  },
+  {
+    "id": 36,
+    "name": "Beef Steak"
+  },
+  {
+    "id": 91,
+    "name": "Ẩm thực Fusion"
+  },
+  {
+    "id": 21,
+    "name": "Hải sản"
+  },
+  {
+    "id": 71,
+    "name": "Ẩm thực"
+  },
+  {
+    "id": 38,
+    "name": "BBQ Grilled"
+  },
+  {
+    "id": 62,
+    "name": "Ẩm thực Nhật"
+  },
+  {
+    "id": 42,
+    "name": "Liquor"
+  },
+  {
+    "id": 30,
+    "name": "Nhà hàng"
+  },
+  {
+    "id": 33,
+    "name": "Karaoke"
+  },
+  {
+    "id": 105,
+    "name": "Milk Tea/ Fruit Tea"
+  },
+  {
+    "id": 45,
+    "name": "Wedding Party"
+  },
+  {
+    "id": 89,
+    "name": "Bánh Mì/Xôi"
+  },
+  {
+    "id": 77,
+    "name": "Bún/Phở"
+  },
+  {
+    "id": 20,
+    "name": "Lẩu nướng"
+  },
+  {
+    "id": 48,
+    "name": "Nails"
+  },
+  {
+    "id": 25,
+    "name": "Ẩm thực Việt"
+  },
+  {
+    "id": 37,
+    "name": "Healthy Food"
+  },
+  {
+    "id": 76,
+    "name": "Ẩm thực Đà Nẵng"
+  },
+  {
+    "id": 51,
+    "name": "Dine"
+  },
+  {
+    "id": 31,
+    "name": "Cafe - Trà sữa - Nước ép"
+  },
+  {
+    "id": 59,
+    "name": "Bistro"
+  },
+  {
+    "id": 27,
+    "name": "Ẩm thực Á"
+  },
+  {
+    "id": 79,
+    "name": "Michelin Selected"
+  },
+  {
+    "id": 49,
+    "name": "Coffee"
+  },
+  {
+    "id": 23,
+    "name": "Ẩm thực Hàn"
+  },
+  {
+    "id": 24,
+    "name": "Ẩm thực Nhật"
+  },
+  {
+    "id": 96,
+    "name": "Buffet"
+  },
+  {
+    "id": 81,
+    "name": "Bib Gourmand"
+  },
+  {
+    "id": 32,
+    "name": "Bar - Lounge"
+  },
+  {
+    "id": 34,
+    "name": "Massage"
+  },
+  {
+    "id": 74,
+    "name": "BBQ Hàn Quốc"
+  },
+  {
+    "id": 70,
+    "name": "Vui chơi"
+  },
+  {
+    "id": 47,
+    "name": "Bistro"
+  },
+  {
+    "id": 50,
+    "name": "Rooftop"
+  },
+  {
+    "id": 43,
+    "name": "Hidden Bar"
+  },
+  {
+    "id": 85,
+    "name": "Rooftop"
+  },
+  {
+    "id": 35,
+    "name": "Spa - Chăm sóc cơ thể"
+  },
+  {
+    "id": 102,
+    "name": "Ẩm thực Halal"
+  },
+  {
+    "id": 63,
+    "name": "Ẩm Thực Trung"
+  },
+  {
+    "id": 22,
+    "name": "Quán nhậu/Craft beer"
+  },
+  {
+    "id": 107,
+    "name": "Tất cả"
+  },
+  {
+    "id": 52,
+    "name": "Coffee"
+  },
+  {
+    "id": 41,
+    "name": "Bar"
+  },
+  {
+    "id": 100,
+    "name": "Ẩm thực Ấn Độ"
+  },
+  {
+    "id": 61,
+    "name": "Omakase"
+  },
+  {
+    "id": 99,
+    "name": "Ẩm thực Trung"
+  },
+  {
+    "id": 66,
+    "name": "Italia"
+  },
+  {
+    "id": 54,
+    "name": "Fine Dining"
+  },
+  {
+    "id": 90,
+    "name": "Ẩm thực Pháp"
+  },
+  {
+    "id": 46,
+    "name": "Omakase"
+  }
+]

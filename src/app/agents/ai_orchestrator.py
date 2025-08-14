@@ -9,14 +9,15 @@ import re
 from langgraph.graph import StateGraph, END
 
 from ..models.platform_models import PlatformContext, PlatformType, DeviceType, LanguageType
-from ..models.schemas import ChatRequest, ChatResponse, QnAResponse
+from ..models.schemas import ChatRequest, ChatResponse, QnAResponse, Suggestion
 from ..agents.qna_agent import QnAAgent
 from ..agents.service_agent import ServiceAgent
 from ..agents.booking_agent import BookingAgent
 from ..core.cta_engine import CTAEngine
 from ..core.conversation_memory import ConversationMemory
+from ..core.error_handling import ErrorHandler, ValidationError, AgentError, LLMError
 
-from ..llm.open_client import OpenAIClient
+from ..llm.rate_limited_client import RateLimitedLLMClient
 from ..services.email_service import EmailService
 
 
@@ -34,6 +35,9 @@ class WorkflowState(TypedDict):
     intent: Optional[str]
     response: Optional[Dict[str, Any]]
     
+    # Language enrichment
+    language_enriched: Optional[bool]
+    
     # Output
     final_response: Optional[ChatResponse]
     error: Optional[str]
@@ -42,10 +46,18 @@ class WorkflowState(TypedDict):
 class AIAgentOrchestrator:
     """AI Agent Orchestrator - LangGraph-based workflow for TripC.AI Chatbot"""
     
-    def __init__(self, qna_agent: QnAAgent, service_agent: ServiceAgent, llm_client: OpenAIClient = None, email_service: Optional[EmailService] = None):
+    def __init__(self, qna_agent: QnAAgent, service_agent: ServiceAgent, llm_client: RateLimitedLLMClient = None, email_service: Optional[EmailService] = None):
         self.qna_agent = qna_agent
         self.service_agent = service_agent
-        self.llm_client = llm_client or OpenAIClient()  # Auto-create if not provided
+        
+        # Create rate-limited LLM client if not provided
+        if llm_client is None:
+            from ..llm.open_client import OpenAIClient
+            base_llm_client = OpenAIClient()
+            self.llm_client = RateLimitedLLMClient(base_llm_client)
+        else:
+            self.llm_client = llm_client
+            
         self.cta_engine = CTAEngine()
         self.memory = ConversationMemory()
         self.booking_agent = BookingAgent(self.memory, email_service, self.llm_client, service_agent)
@@ -61,9 +73,10 @@ class AIAgentOrchestrator:
         # Add nodes
         workflow.add_node("validate_platform", self._validate_platform)
         workflow.add_node("classify_intent", self._classify_intent)
-        workflow.add_node("route_to_agent", self._route_to_agent)
         workflow.add_node("rewrite_to_standalone", self._rewrite_to_standalone)
+        workflow.add_node("route_to_agent", self._route_to_agent)
         workflow.add_node("add_cta", self._add_cta)
+        workflow.add_node("enrich_language", self._enrich_language)
         workflow.add_node("format_response", self._format_response)
         
         # Add edges
@@ -72,7 +85,8 @@ class AIAgentOrchestrator:
         workflow.add_edge("classify_intent", "rewrite_to_standalone")
         workflow.add_edge("rewrite_to_standalone", "route_to_agent")
         workflow.add_edge("route_to_agent", "add_cta")
-        workflow.add_edge("add_cta", "format_response")
+        workflow.add_edge("add_cta", "enrich_language")
+        workflow.add_edge("enrich_language", "format_response")
         workflow.add_edge("format_response", END)
         
         # Add conditional edges for error handling
@@ -82,6 +96,16 @@ class AIAgentOrchestrator:
             {
                 "continue": "classify_intent",
                 "error": END
+            }
+        )
+        
+        # Add conditional edges for rewrite_to_standalone clarification handling
+        workflow.add_conditional_edges(
+            "rewrite_to_standalone",
+            self._should_continue_after_rewrite,
+            {
+                "continue": "route_to_agent",
+                "clarify": "add_cta"  # Skip routing, go directly to CTA
             }
         )
         
@@ -96,8 +120,7 @@ class AIAgentOrchestrator:
             
             # Validate platform-device compatibility
             if platform == PlatformType.MOBILE_APP and device == DeviceType.DESKTOP:
-                state["error"] = "Mobile app platform cannot be used with desktop device"
-                return state
+                raise ValidationError("Mobile app platform cannot be used with desktop device")
             
             # Create platform context
             platform_context = PlatformContext(
@@ -109,9 +132,10 @@ class AIAgentOrchestrator:
             state["platform_context"] = platform_context
             return state
             
+        except ValidationError:
+            raise
         except Exception as e:
-            state["error"] = f"Platform validation error: {str(e)}"
-            return state
+            raise ValidationError(f"Platform validation error: {str(e)}")
     
     def _should_continue(self, state: WorkflowState) -> str:
         """Determine if workflow should continue or end with error"""
@@ -119,81 +143,433 @@ class AIAgentOrchestrator:
             return "error"
         return "continue"
     
+    def _should_continue_after_rewrite(self, state: WorkflowState) -> str:
+        """Determine if workflow should continue to routing or skip to CTA for clarification"""
+        if state.get("needs_clarification"):
+            return "clarify"
+        return "continue"
+    
     async def _classify_intent(self, state: WorkflowState) -> WorkflowState:
-        """Classify user intent using LLM for intelligent classification"""
+        """Classify user intent using LLM for intelligent classification with deep reasoning"""
         try:
             message = state["message"]
             language = state.get("language", "vi")
+            conversation_id = state.get("conversationId") or "default"
             
-            # Optimized prompts for fast and accurate intent classification
-            if language == "vi":
-                system_prompt = """Phân loại ý định người dùng (chỉ trả về đúng 1 từ: service/booking/qna):
-- service: người dùng muốn TÌM/Khám phá/Đề xuất dịch vụ để sử dụng (ăn uống, nghỉ ngơi, khách sạn, nhà hàng, tour, điểm đến, kế hoạch đi đâu)
-- booking: người dùng có Ý ĐỊNH ĐẶT chỗ/đặt bàn/đặt tour/xác nhận giữ chỗ/yêu cầu liên hệ để đặt
-- qna: người dùng HỎI THÔNG TIN chung (mô tả, đánh giá, "đẹp không", giá vé, giờ mở cửa, so sánh, hướng dẫn)
-
-Ví dụ:
-- "Tôi muốn tìm nhà hàng hải sản" → service
-- "Đặt bàn lúc 7h tối nay" → booking
-- "Bảo tàng Đà Nẵng có đẹp không?" → qna
-
-Chỉ trả về: service hoặc booking hoặc qna"""
-                user_prompt = f"Câu: '{message}'\nKết quả:"
-            else:
-                system_prompt = """Classify intent (return exactly ONE word: service/booking/qna):
-- service: user wants to FIND/Explore/Recommend services to use (food, rest, hotels, restaurants, tours, destinations, plan where to go)
-- booking: user INTENDS to BOOK/reserve/confirm a table/tour or asks to be contacted to book
-- qna: user ASKS general info (description, reviews, "is it beautiful?", ticket prices, opening hours, comparisons, guidance)
-
-Examples:
-- "Find a seafood restaurant" → service
-- "Book a table at 7pm" → booking
-- "Is Da Nang Museum beautiful?" → qna
-
-Return only: service or booking or qna"""
-                user_prompt = f"Input: '{message}'\nOutput:"
+            # Extract user identifier from conversation_id if available
+            user_identifier = None
+            if conversation_id and conversation_id != "default":
+                # Try to extract user identifier from conversation_id format: user_xxx_timestamp_random
+                parts = conversation_id.split("_")
+                if len(parts) >= 2 and parts[0] in ["user", "session"]:
+                    user_identifier = f"{parts[0]}_{parts[1]}"
             
-            # Use LLM to classify intent
-            if self.llm_client:
+            # Get conversation history and context for deep reasoning
+            recent_turns = self.memory.get_recent(conversation_id, k=6)  # Get more context
+            entities = self.memory.get_entities(conversation_id)
+            
+            # Build context information
+            context_info = self._build_context_for_intent(recent_turns, entities, language)
+            
+            print(f"🤔 [INTENT ANALYSIS] Analyzing message: '{message}'")
+            print(f"📚 [CONTEXT] Recent turns: {len(recent_turns)}, Entities: {list(entities.keys()) if entities else 'None'}")
+            
+            # Enhanced LLM-based intent classification with deep reasoning
+            if self.llm_client and self.llm_client.is_configured():
                 try:
-                    # Get LLM response for intent classification
-                    combined_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}"
-                    llm_response = self.llm_client.generate_response(
-                        prompt=combined_prompt,
-                        model="gpt-3.5-turbo",  # Use appropriate model
-                        max_tokens=5,  # Reduced for faster response
-                        temperature=0.1  # Lower temperature for more consistent results
+                    intent_result = await self._llm_deep_intent_classification(
+                        message, context_info, language
                     )
-                    # Extract intent from LLM response - optimized parsing
-                    intent_response = llm_response.strip().lower() if llm_response else ""
                     
-                    # Fast intent mapping with exact matches
-                    if intent_response in ["service", "s"]:
-                        state["intent"] = "service"
-                    elif intent_response in ["booking", "book", "b"]:
-                        state["intent"] = "booking"
-                    elif intent_response in ["qna", "q"]:
-                        state["intent"] = "qna"
+                    if intent_result.get("confidence") == "high":
+                        state["intent"] = intent_result["intent"]
+                        print(f"✅ [INTENT] High confidence: {intent_result['intent']} - {intent_result['reasoning']}")
+                    elif intent_result.get("confidence") == "medium":
+                        state["intent"] = intent_result["intent"]
+                        print(f"⚠️ [INTENT] Medium confidence: {intent_result['intent']} - {intent_result['reasoning']}")
                     else:
-                        # Fallback to qna if LLM response is unclear
-                        state["intent"] = "qna"
+                        # Low confidence - ask for clarification
+                        state["needs_clarification"] = True
+                        state["clarify_question"] = intent_result.get("clarification_question", "")
+                        state["intent"] = "qna"  # Default to qna while clarifying
+                        print(f"❓ [INTENT] Low confidence - asking: {intent_result.get('clarification_question', '')}")
                         
                 except Exception as e:
-                    # Fallback to keyword-based classification if LLM fails
-                    print(f"❌ LLM intent classification failed: {e}, falling back to keywords")
+                    print(f"❌ [INTENT] LLM classification failed: {e}, falling back to keywords")
                     state["intent"] = self._fallback_keyword_classification(message)
             else:
                 # Fallback to keyword-based classification if no LLM client
                 state["intent"] = self._fallback_keyword_classification(message)
+                print(f"🔍 [INTENT] Using keyword fallback: {state['intent']}")
             
             return state
             
         except Exception as e:
-            # Error handling - default to qna
-            print(f"❌ Intent classification error: {e}")
+            print(f"❌ [INTENT] Intent classification error: {e}")
             state["intent"] = "qna"
             return state
 
+    def _build_context_for_intent(self, recent_turns: list, entities: dict, language: str) -> dict:
+        """Build comprehensive context for intent classification"""
+        context = {
+            "recent_conversation": [],
+            "current_topics": [],
+            "user_preferences": {},
+            "booking_state": None,
+            "mentioned_places": [],
+            "conversation_flow": "new"
+        }
+        
+        # Extract recent conversation flow
+        for turn in recent_turns[-4:]:  # Last 4 turns
+            if turn.get("role") and turn.get("content"):
+                context["recent_conversation"].append({
+                    "role": turn["role"],
+                    "content": turn["content"][:100] + "..." if len(turn["content"]) > 100 else turn["content"]
+                })
+        
+        # Extract current topics and preferences
+        if entities:
+            context["current_topics"] = [
+                entities.get("current_place"),
+                entities.get("last_mentioned_place"),
+                entities.get("current_topic"),
+                entities.get("last_subject")
+            ]
+            context["current_topics"] = [t for t in context["current_topics"] if t]
+            
+            # Extract user preferences
+            context["user_preferences"] = {
+                "name": entities.get("user_name"),
+                "email": entities.get("user_email"),
+                "phone": entities.get("user_phone"),
+                "language": entities.get("user_language")
+            }
+            
+            # Check booking state
+            booking = entities.get("booking")
+            if booking and isinstance(booking, dict):
+                context["booking_state"] = {
+                    "status": booking.get("status"),
+                    "restaurant": booking.get("restaurant"),
+                    "party_size": booking.get("party_size"),
+                    "time": booking.get("time")
+                }
+        
+        # Determine conversation flow
+        if len(recent_turns) > 2:
+            context["conversation_flow"] = "ongoing"
+        else:
+            context["conversation_flow"] = "new"
+        
+        return context
+
+    async def _llm_deep_intent_classification(self, message: str, context: dict, language: str) -> dict:
+        """Deep intent classification using LLM with context and reasoning"""
+        
+        if language == "vi":
+            system_prompt = """Bạn là chuyên gia phân tích ý định người dùng với khả năng suy luận sâu.
+
+NHIỆM VỤ: Phân tích câu hỏi của người dùng và xác định ý định chính xác nhất.
+
+3 LOẠI Ý ĐỊNH:
+1. service: Người dùng muốn TÌM/KHÁM PHÁ/ĐỀ XUẤT dịch vụ để sử dụng
+   - Tìm nhà hàng, khách sạn, tour, địa điểm
+   - Khám phá ẩm thực, văn hóa, điểm đến
+   - Đề xuất nơi ăn, nơi nghỉ, nơi tham quan
+
+2. booking: Người dùng có Ý ĐỊNH ĐẶT CHỖ/GIAO DỊCH
+   - Đặt bàn, đặt phòng, đặt tour
+   - Xác nhận giữ chỗ, thanh toán
+   - Yêu cầu liên hệ để đặt
+
+3. qna: Người dùng HỎI THÔNG TIN/TƯ VẤN
+   - Thông tin mô tả, đánh giá, so sánh
+   - Giá vé, giờ mở cửa, chính sách
+   - Tư vấn, gợi ý, khuyên bảo
+
+QUY TẮC SUY LUẬN:
+- Phân tích ngữ cảnh cuộc hội thoại gần đây
+- Xem xét trạng thái booking hiện tại
+- Hiểu ý định ẩn trong câu hỏi
+- Nếu chưa chắc chắn, hỏi lại để làm rõ
+
+TRẢ VỀ JSON:
+{
+  "intent": "service|booking|qna",
+  "confidence": "high|medium|low",
+  "reasoning": "lý do chi tiết",
+  "clarification_question": "câu hỏi làm rõ (nếu confidence=low)"
+}"""
+            
+            user_prompt = f"""NGỮ CẢNH HỘI THOẠI:
+{self._format_context_for_prompt(context, language)}
+
+CÂU HỎI HIỆN TẠI: "{message}"
+
+Hãy phân tích và trả về JSON."""
+            
+        else:
+            system_prompt = """You are an expert user intent analyzer with deep reasoning capabilities.
+
+TASK: Analyze the user's question and determine the most accurate intent.
+
+3 INTENT TYPES:
+1. service: User wants to FIND/EXPLORE/RECOMMEND services to use
+   - Find restaurants, hotels, tours, destinations
+   - Explore cuisine, culture, attractions
+   - Suggest places to eat, stay, visit
+
+2. booking: User INTENDS to BOOK/MAKE TRANSACTION
+   - Book table, room, tour
+   - Confirm reservation, payment
+   - Request contact for booking
+
+3. qna: User ASKS for INFORMATION/ADVICE
+   - Description, reviews, comparisons
+   - Ticket prices, opening hours, policies
+   - Advice, suggestions, recommendations
+
+REASONING RULES:
+- Analyze recent conversation context
+- Consider current booking state
+- Understand hidden intent in questions
+- If uncertain, ask for clarification
+
+RETURN JSON:
+{
+  "intent": "service|booking|qna",
+  "confidence": "high|medium|low",
+  "reasoning": "detailed reasoning",
+  "clarification_question": "clarification question (if confidence=low)"
+}"""
+            
+            user_prompt = f"""CONVERSATION CONTEXT:
+{self._format_context_for_prompt(context, language)}
+
+CURRENT QUESTION: "{message}"
+
+Please analyze and return JSON."""
+        
+        combined_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}"
+        
+        try:
+            llm_response = self.llm_client.generate_response_sync(
+                prompt=combined_prompt,
+                max_tokens=300,
+                temperature=0.1
+            )
+            
+            if llm_response:
+                import json
+                import re
+                
+                # Extract JSON from response
+                json_match = re.search(r'\{.*\}', llm_response, re.DOTALL)
+                if json_match:
+                    data = json.loads(json_match.group(0))
+                    
+                    # Validate intent
+                    intent = data.get("intent", "").lower()
+                    if intent not in ["service", "booking", "qna"]:
+                        intent = "qna"  # Default fallback
+                    
+                    confidence = data.get("confidence", "low").lower()
+                    reasoning = data.get("reasoning", "")
+                    clarification_question = data.get("clarification_question", "")
+                    
+                    return {
+                        "intent": intent,
+                        "confidence": confidence,
+                        "reasoning": reasoning,
+                        "clarification_question": clarification_question
+                    }
+            
+            # Fallback if JSON parsing fails
+            return {
+                "intent": "qna",
+                "confidence": "low",
+                "reasoning": "JSON parsing failed",
+                "clarification_question": "Bạn có thể nói rõ hơn về điều bạn muốn hỏi không?"
+            }
+            
+        except Exception as e:
+            print(f"❌ [INTENT] LLM deep classification error: {e}")
+            return {
+                "intent": "qna",
+                "confidence": "low",
+                "reasoning": f"LLM error: {str(e)}",
+                "clarification_question": "Bạn có thể nói rõ hơn về điều bạn muốn hỏi không?"
+            }
+
+    def _format_context_for_prompt(self, context: dict, language: str) -> str:
+        """Format context information for LLM prompt"""
+        if language == "vi":
+            formatted = []
+            
+            # Recent conversation
+            if context["recent_conversation"]:
+                formatted.append("HỘI THOẠI GẦN ĐÂY:")
+                for turn in context["recent_conversation"]:
+                    role = "Người dùng" if turn["role"] == "user" else "Bot"
+                    formatted.append(f"- {role}: {turn['content']}")
+            
+            # Current topics
+            if context["current_topics"]:
+                formatted.append(f"CHỦ ĐỀ HIỆN TẠI: {', '.join(context['current_topics'])}")
+            
+            # Booking state
+            if context["booking_state"]:
+                booking = context["booking_state"]
+                formatted.append(f"TRẠNG THÁI ĐẶT CHỖ: {booking['status']}")
+                if booking.get("restaurant"):
+                    formatted.append(f"- Nhà hàng: {booking['restaurant']}")
+                if booking.get("party_size"):
+                    formatted.append(f"- Số người: {booking['party_size']}")
+                if booking.get("time"):
+                    formatted.append(f"- Thời gian: {booking['time']}")
+            
+            # User preferences
+            if context["user_preferences"].get("name"):
+                formatted.append(f"TÊN NGƯỜI DÙNG: {context['user_preferences']['name']}")
+            
+            # Conversation flow
+            formatted.append(f"LOẠI HỘI THOẠI: {context['conversation_flow']}")
+            
+        else:
+            formatted = []
+            
+            # Recent conversation
+            if context["recent_conversation"]:
+                formatted.append("RECENT CONVERSATION:")
+                for turn in context["recent_conversation"]:
+                    role = "User" if turn["role"] == "user" else "Bot"
+                    formatted.append(f"- {role}: {turn['content']}")
+            
+            # Current topics
+            if context["current_topics"]:
+                formatted.append(f"CURRENT TOPICS: {', '.join(context['current_topics'])}")
+            
+            # Booking state
+            if context["booking_state"]:
+                booking = context["booking_state"]
+                formatted.append(f"BOOKING STATE: {booking['status']}")
+                if booking.get("restaurant"):
+                    formatted.append(f"- Restaurant: {booking['restaurant']}")
+                if booking.get("party_size"):
+                    formatted.append(f"- Party size: {booking['party_size']}")
+                if booking.get("time"):
+                    formatted.append(f"- Time: {booking['time']}")
+            
+            # User preferences
+            if context["user_preferences"].get("name"):
+                formatted.append(f"USER NAME: {context['user_preferences']['name']}")
+            
+            # Conversation flow
+            formatted.append(f"CONVERSATION TYPE: {context['conversation_flow']}")
+        
+        return "\n".join(formatted)
+
+    def _user_wants_to_continue_booking(self, message: str, original_intent: str) -> bool:
+        """Check if user wants to continue booking or do something else"""
+        message_lower = message.lower().strip()
+        
+        # If original intent is already booking, user likely wants to continue
+        if original_intent == "booking":
+            return True
+            
+        # Keywords that indicate user wants to continue booking
+        booking_continuation_keywords = [
+            # Providing booking information
+            "tên tôi là", "tên tôi", "my name is", "my name",
+            "số điện thoại", "điện thoại", "phone", "sdt",
+            "email", "mail", "e-mail",
+            "địa chỉ", "address",
+            
+            # Confirming booking
+            "xác nhận", "confirm", "đồng ý", "agree", "ok", "okay",
+            "chốt", "gửi", "send", "hoàn tất", "finish", "done",
+            
+            # Booking details
+            "số người", "mấy người", "how many people", "party size",
+            "thời gian", "lúc", "giờ", "time", "when",
+            "ngày", "date", "hôm nay", "today", "tối nay", "tonight",
+            
+            # Direct booking actions
+            "đặt bàn", "book table", "đặt chỗ", "reserve",
+            "đặt phòng", "book room", "đặt tour", "book tour"
+        ]
+        
+        # Keywords that indicate user wants to do something else
+        other_action_keywords = [
+            # Service discovery
+            "gợi ý", "suggest", "tìm", "find", "search", "khám phá", "explore",
+            "nhà hàng khác", "other restaurants", "thêm", "more",
+            "xem", "show", "danh sách", "list",
+            
+            # Information requests
+            "là gì", "what is", "tại sao", "why", "như thế nào", "how",
+            "giá", "price", "cost", "đẹp không", "is it beautiful",
+            "giờ mở cửa", "opening hours", "địa chỉ", "address",
+            
+            # General questions
+            "có gì", "what's", "thông tin", "information", "mô tả", "description",
+            "đánh giá", "review", "rating", "feedback"
+        ]
+        
+        # Check for booking continuation keywords
+        has_booking_keywords = any(keyword in message_lower for keyword in booking_continuation_keywords)
+        
+        # Check for other action keywords
+        has_other_keywords = any(keyword in message_lower for keyword in other_action_keywords)
+        
+        # Decision logic
+        if has_booking_keywords and not has_other_keywords:
+            return True  # User wants to continue booking
+        elif has_other_keywords and not has_booking_keywords:
+            return False  # User wants to do something else
+        elif has_booking_keywords and has_other_keywords:
+            # Mixed signals - use LLM to decide
+            return self._llm_decide_booking_continuation(message)
+        else:
+            # No clear keywords - default to continue booking if in booking flow
+            return True
+    
+    def _llm_decide_booking_continuation(self, message: str) -> bool:
+        """Use LLM to decide if user wants to continue booking when signals are mixed"""
+        try:
+            if not self.llm_client or not self.llm_client.is_configured():
+                return True  # Default to continue booking if LLM not available
+            
+            prompt = f"""Phân tích câu hỏi của người dùng và xác định họ có muốn tiếp tục quá trình đặt bàn hay không.
+
+Câu hỏi: "{message}"
+
+Trả về JSON:
+{{"continue_booking": true/false, "reason": "lý do"}}
+
+- continue_booking = true: Người dùng muốn tiếp tục đặt bàn (cung cấp thông tin, xác nhận, hoàn tất)
+- continue_booking = false: Người dùng muốn làm việc khác (tìm kiếm, hỏi thông tin, gợi ý)
+
+Chỉ trả về JSON, không có text khác."""
+            
+            response = self.llm_client.generate_response_sync(prompt, max_tokens=100, temperature=0.1)
+            
+            if response:
+                import json
+                import re
+                
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    data = json.loads(json_match.group(0))
+                    return data.get("continue_booking", True)
+            
+            return True  # Default to continue booking
+            
+        except Exception as e:
+            print(f"⚠️ [LLM DECISION] Error in booking continuation decision: {e}")
+            return True  # Default to continue booking
+    
     async def _rewrite_to_standalone(self, state: WorkflowState) -> WorkflowState:
         """Rewrite current message to a standalone question using recent context"""
         try:
@@ -274,7 +650,7 @@ Return only: service or booking or qna"""
                         "Return JSON."
                     )
                 prompt = f"System: {system}\n\nUser: {user}"
-                out = self.llm_client.generate_response(prompt, max_tokens=160, temperature=0.1)
+                out = self.llm_client.generate_response_sync(prompt, max_tokens=160, temperature=0.1)
                 if out:
                     try:
                         import json, re
@@ -297,10 +673,10 @@ Return only: service or booking or qna"""
                 try:
                     # Save a lightweight subject for future references
                     subject_hint = rewritten
-                    self.memory.set_entities(conversation_id, {
+                    self.memory.update_entities_safe(conversation_id, {
                         "last_subject": subject_hint,
                         "current_topic": subject_hint
-                    })
+                    }, "rewrite_to_standalone")
                 except Exception:
                     pass
             return state
@@ -383,45 +759,37 @@ Return only: service or booking or qna"""
             return "qna"
     
     async def _route_to_agent(self, state: WorkflowState) -> WorkflowState:
-        """Route request to appropriate agent"""
+        """Route request to appropriate agent with enhanced logging and clarification handling"""
         intent = state["intent"]
+        original_intent = intent
         platform_context = state["platform_context"]
         message = state["message"]
         conversation_id = state.get("conversationId") or "default"
         
+        print(f"🔄 [ROUTING] Routing to agent: {intent}")
+        print(f"📝 [MESSAGE] User message: '{message}'")
+        
         try:
-            # If clarification is needed, ask user instead of proceeding
-            if state.get("needs_clarification"):
-                ask = state.get("clarify_question") or (
-                    "Bạn đang nói đến địa điểm hay nội dung nào ạ?" if platform_context.language.value == "vi"
-                    else "Which place or topic do you mean?"
-                )
-                ask_response = QnAResponse(
-                    type="QnA",
-                    answerAI=ask,
-                    sources=[],
-                    suggestions=[
-                        {"label": ("Mô tả rõ" if platform_context.language.value == "vi" else "Specify"), "action": "clarify_subject"}
-                    ]
-                )
-                state["response"] = ask_response.dict()
-                # Clear one-shot clarification flags
-                state.pop("needs_clarification", None)
-                state.pop("clarify_question", None)
-                return state
-
-            # Persist booking flow across turns: if booking is in progress, keep routing to booking
+            # Smart booking flow routing: check if user wants to continue booking or do something else
             try:
                 entities = self.memory.get_entities(conversation_id)
                 booking_state = entities.get("booking") if isinstance(entities, dict) else None
                 if booking_state and isinstance(booking_state, dict):
                     status = booking_state.get("status")
                     if status in ("collecting", "ready"):
-                        intent = "booking"
-            except Exception:
-                pass
+                        # Check if user wants to continue booking or do something else
+                        if self._user_wants_to_continue_booking(message, original_intent):
+                            original_intent = intent
+                            intent = "booking"
+                            print(f"📋 [BOOKING FLOW] User wants to continue booking - overriding intent from {original_intent} to booking (status: {status})")
+                        else:
+                            print(f"🔄 [BOOKING FLOW] User wants to do something else - keeping intent as {intent} (status: {status})")
+            except Exception as e:
+                print(f"⚠️ [ROUTING] Error checking booking state: {e}")
 
+            # Route based on intent
             if intent == "service":
+                print(f"🏪 [SERVICE AGENT] Routing to service agent")
                 # Route to service agent
                 response = await self.service_agent.get_services(
                     query=message,
@@ -429,6 +797,8 @@ Return only: service or booking or qna"""
                     service_type="restaurant"
                 )
                 state["response"] = response.dict()
+                print(f"✅ [SERVICE AGENT] Response generated successfully")
+                
                 # Store entity for follow-ups
                 try:
                     services = state["response"].get("services") or []
@@ -436,14 +806,16 @@ Return only: service or booking or qna"""
                         top = services[0]
                         place_name = top.get("name")
                         if place_name:
-                            self.memory.set_entities(conversation_id, {
+                            self.memory.update_entities_safe(conversation_id, {
                                 "current_place": place_name,
                                 "last_mentioned_place": place_name
-                            })
-                except Exception:
-                    pass
+                            }, "service_agent")
+                            print(f"💾 [MEMORY] Stored place: {place_name}")
+                except Exception as e:
+                    print(f"⚠️ [MEMORY] Error storing service entities: {e}")
                 
             elif intent == "booking":
+                print(f"📅 [BOOKING AGENT] Routing to booking agent")
                 # Conversational booking flow via BookingAgent
                 booking_response = await self.booking_agent.handle(
                     conversation_id=conversation_id,
@@ -451,38 +823,78 @@ Return only: service or booking or qna"""
                     platform_context=platform_context,
                 )
                 state["response"] = booking_response.dict()
+                print(f"✅ [BOOKING AGENT] Response generated successfully")
                 
             else:
+                print(f"❓ [QNA AGENT] Routing to QnA agent")
                 # Route to QnA agent
                 response = await self.qna_agent.search_embedding(
                     query=message,
                     platform_context=platform_context
                 )
                 state["response"] = response.dict()
+                print(f"✅ [QNA AGENT] Response generated successfully")
+                
                 # Store topic/subject to help resolve follow-ups like "ở đó/cái đó"
                 try:
                     sources = state["response"].get("sources") or []
                     top_title = sources[0].get("title") if sources else None
                     subject = top_title or message
-                    self.memory.set_entities(conversation_id, {
+                    self.memory.update_entities_safe(conversation_id, {
                         "last_subject": subject,
                         "current_topic": subject
-                    })
-                except Exception:
-                    pass
+                    }, "qna_agent")
+                    print(f"💾 [MEMORY] Stored subject: {subject}")
+                except Exception as e:
+                    print(f"⚠️ [MEMORY] Error storing QnA entities: {e}")
             
             return state
             
         except Exception as e:
-            state["error"] = f"Agent routing error: {str(e)}"
-            return state
+            print(f"❌ [ROUTING] Agent routing error: {e}")
+            raise AgentError(f"Agent routing error: {str(e)}", "orchestrator")
     
     async def _add_cta(self, state: WorkflowState) -> WorkflowState:
-        """Add platform-specific CTA to response"""
+        """Add platform-specific CTA to response with enhanced clarification handling"""
         if state.get("error"):
             return state
-            
+        
         platform_context = state["platform_context"]
+        
+        # Handle clarification case - create response here
+        if state.get("needs_clarification"):
+            ask = state.get("clarify_question") or (
+                "Bạn đang nói đến địa điểm hay nội dung nào ạ?" if platform_context.language.value == "vi"
+                else "Which place or topic do you mean?"
+            )
+            
+            print(f"❓ [CLARIFICATION] Asking for clarification: '{ask}'")
+            
+            ask_response = QnAResponse(
+                type="QnA",
+                answerAI=ask,
+                sources=[],
+                suggestions=[
+                    Suggestion(
+                        label=("Mô tả rõ" if platform_context.language.value == "vi" else "Specify"), 
+                        action="clarify_subject"
+                    ),
+                    Suggestion(
+                        label=("Tìm nhà hàng" if platform_context.language.value == "vi" else "Find restaurants"), 
+                        action="search_services"
+                    ),
+                    Suggestion(
+                        label=("Đặt bàn" if platform_context.language.value == "vi" else "Book table"), 
+                        action="start_booking"
+                    )
+                ]
+            )
+            state["response"] = ask_response.dict()
+            # Clear one-shot clarification flags
+            state.pop("needs_clarification", None)
+            state.pop("clarify_question", None)
+            print(f"✅ [CLARIFICATION] Clarification response created")
+        
         response = state["response"]
         
         try:
@@ -518,50 +930,154 @@ Return only: service or booking or qna"""
             return state
             
         except Exception as e:
-            state["error"] = f"CTA generation error: {str(e)}"
+            raise AgentError(f"CTA generation error: {str(e)}", "cta_engine")
+    
+    async def _enrich_language(self, state: WorkflowState) -> WorkflowState:
+        """Enrich answerAI language using LLM for booking and service responses only"""
+        try:
+            response = state["response"]
+            response_type = response.get("type", "")
+            answer_ai = response.get("answerAI", "")
+            language = state.get("language", "vi")
+            
+            # Only enrich for booking and service responses, not QnA embedding
+            # QnA from booking agent can still be enriched
+            if response_type in ["Service", "booking", "QnA"] and answer_ai and self.llm_client and self.llm_client.is_configured():
+                # Skip enrichment for QnA embedding responses (from QnAAgent)
+                # But allow enrichment for QnA from booking agent
+                if response_type == "QnA":
+                    # Check if this is from QnAAgent (embedding-based) or booking agent
+                    # We can detect this by checking if there are sources (embedding-based QnA has sources)
+                    sources = response.get("sources", [])
+                    if sources:
+                        print(f"⏭️ [LANGUAGE ENRICHMENT] Skipping QnA embedding response (has sources)")
+                        state["response"] = response
+                        return state
+                    else:
+                        print(f"🎨 [LANGUAGE ENRICHMENT] Enriching QnA from booking agent")
+                else:
+                    print(f"🎨 [LANGUAGE ENRICHMENT] Enriching {response_type} response")
+                
+                try:
+                    enriched_answer = await self._llm_enrich_language(answer_ai, response_type, language)
+                    if enriched_answer and enriched_answer.strip():
+                        response["answerAI"] = enriched_answer
+                        state["language_enriched"] = True
+                        print(f"✅ [LANGUAGE ENRICHMENT] Successfully enriched response")
+                    else:
+                        print(f"⚠️ [LANGUAGE ENRICHMENT] No enrichment applied, keeping original")
+                except Exception as e:
+                    print(f"⚠️ [LANGUAGE ENRICHMENT] Error enriching language: {e}, keeping original")
+            else:
+                print(f"⏭️ [LANGUAGE ENRICHMENT] Skipping enrichment for {response_type} response")
+            
+            state["response"] = response
             return state
+            
+        except Exception as e:
+            print(f"❌ [LANGUAGE ENRICHMENT] Error in language enrichment: {e}")
+            return state
+    
+    async def _llm_enrich_language(self, original_answer: str, response_type: str, language: str) -> str:
+        """Use LLM to enrich language naturally without changing core meaning"""
+        
+        if language == "vi":
+            system_prompt = """Bạn là chuyên gia làm giàu ngôn ngữ tự nhiên. NHIỆM VỤ: Làm giàu câu trả lời để tự nhiên hơn, thân thiện hơn nhưng KHÔNG thay đổi ý nghĩa cốt lõi.
+
+QUY TẮC:
+1. GIỮ NGUYÊN ý nghĩa chính và thông tin quan trọng
+2. Thêm từ ngữ tự nhiên, thân thiện, ấm áp
+3. Sử dụng ngôn ngữ giao tiếp tự nhiên
+4. KHÔNG thêm thông tin mới không có trong câu gốc
+5. KHÔNG thay đổi cấu trúc logic
+
+VÍ DỤ:
+- Gốc: "Tìm thấy 5 nhà hàng"
+- Làm giàu: "Tôi đã tìm thấy 5 nhà hàng tuyệt vời cho bạn"
+- Gốc: "Đặt bàn thành công"
+- Làm giàu: "Tuyệt vời! Việc đặt bàn của bạn đã được xác nhận thành công"
+
+Chỉ trả về câu trả lời đã làm giàu, không có giải thích."""
+            
+            user_prompt = f"""Loại phản hồi: {response_type}
+Câu trả lời gốc: "{original_answer}"
+
+Hãy làm giàu ngôn ngữ một cách tự nhiên."""
+            
+        else:
+            system_prompt = """You are a natural language enrichment expert. TASK: Enrich the response to make it more natural, friendly, and warm while NOT changing the core meaning.
+
+RULES:
+1. KEEP the main meaning and important information intact
+2. Add natural, friendly, warm language
+3. Use conversational, natural language
+4. DO NOT add new information not in the original
+5. DO NOT change the logical structure
+
+EXAMPLES:
+- Original: "Found 5 restaurants"
+- Enriched: "I found 5 wonderful restaurants for you"
+- Original: "Booking successful"
+- Enriched: "Great! Your booking has been successfully confirmed"
+
+Return only the enriched response, no explanations."""
+            
+            user_prompt = f"""Response type: {response_type}
+Original response: "{original_answer}"
+
+Please enrich the language naturally."""
+        
+        try:
+            combined_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}"
+            
+            enriched = self.llm_client.generate_response_sync(
+                prompt=combined_prompt,
+                max_tokens=200,
+                temperature=0.3  # Low temperature for consistency
+            )
+            
+            if enriched and enriched.strip():
+                # Clean up the response
+                enriched = enriched.strip()
+                # Remove quotes if present
+                if enriched.startswith('"') and enriched.endswith('"'):
+                    enriched = enriched[1:-1]
+                if enriched.startswith("'") and enriched.endswith("'"):
+                    enriched = enriched[1:-1]
+                
+                return enriched
+            
+            return original_answer
+            
+        except Exception as e:
+            print(f"❌ [LLM ENRICHMENT] Error: {e}")
+            return original_answer
     
     async def _format_response(self, state: WorkflowState) -> WorkflowState:
         """Format final response"""
-        if state.get("error"):
-            # Create error response
-            error_response = ChatResponse(
-                type="Error",
-                answerAI=f"Xin lỗi, đã xảy ra lỗi: {state['error']}",
-                sources=[],
-                suggestions=[
-                    {
-                        "label": "Thử lại",
-                        "action": "retry",
-                        "data": {}
-                    }
-                ]
+        # Convert response to ChatResponse
+        response_data = state["response"]
+        
+        # Map response type to ChatResponse
+        if response_data.get("type") == "Service":
+            final_response = ChatResponse(
+                type="Service",
+                answerAI=response_data.get("answerAI", ""),
+                services=response_data.get("services", []),
+                sources=response_data.get("sources", []),
+                suggestions=response_data.get("suggestions", []),
+                cta=response_data.get("cta")
             )
-            state["final_response"] = error_response
         else:
-            # Convert response to ChatResponse
-            response_data = state["response"]
-            
-            # Map response type to ChatResponse
-            if response_data.get("type") == "Service":
-                final_response = ChatResponse(
-                    type="Service",
-                    answerAI=response_data.get("answerAI", ""),
-                    services=response_data.get("services", []),
-                    sources=response_data.get("sources", []),
-                    suggestions=response_data.get("suggestions", []),
-                    cta=response_data.get("cta")
-                )
-            else:
-                final_response = ChatResponse(
-                    type="QnA",
-                    answerAI=response_data.get("answerAI", ""),
-                    sources=response_data.get("sources", []),
-                    suggestions=response_data.get("suggestions", []),
-                    cta=response_data.get("cta")
-                )
-            
-            state["final_response"] = final_response
+            final_response = ChatResponse(
+                type="QnA",
+                answerAI=response_data.get("answerAI", ""),
+                sources=response_data.get("sources", []),
+                suggestions=response_data.get("suggestions", []),
+                cta=response_data.get("cta")
+            )
+        
+        state["final_response"] = final_response
         
         return state
     
@@ -578,6 +1094,7 @@ Return only: service or booking or qna"""
             platform_context=None,
             intent=None,
             response=None,
+            language_enriched=False,
             final_response=None,
             error=None
         )
@@ -586,7 +1103,25 @@ Return only: service or booking or qna"""
         try:
             # Save user turn
             conversation_id = getattr(request, "conversationId", None) or "default"
-            self.memory.add_turn(conversation_id, "user", request.message)
+            
+            # Extract user identifier from conversation_id if available
+            user_identifier = None
+            if conversation_id and conversation_id != "default":
+                parts = conversation_id.split("_")
+                if len(parts) >= 2 and parts[0] in ["user", "session"]:
+                    user_identifier = f"{parts[0]}_{parts[1]}"
+            
+            self.memory.add_turn(
+                conversation_id, 
+                "user", 
+                request.message,
+                meta={
+                    "platform": request.platform,
+                    "device": request.device, 
+                    "language": request.language,
+                    "user_identifier": user_identifier
+                }
+            )
 
             # Update persistent user entities (name/email/phone) from the latest message
             try:
@@ -607,33 +1142,17 @@ Return only: service or booking or qna"""
                 return result["final_response"]
             else:
                 # Fallback error response
-                return ChatResponse(
-                    type="Error",
-                    answerAI="Xin lỗi, đã xảy ra lỗi không xác định",
-                    sources=[],
-                    suggestions=[
-                        {
-                            "label": "Thử lại",
-                            "action": "retry",
-                            "data": {}
-                        }
-                    ]
-                )
+                error_response = ErrorHandler.create_fallback_response(request.language)
+                return ChatResponse(**error_response)
                 
+        except (ValidationError, AgentError, LLMError) as e:
+            # Handle known workflow errors
+            error_response = ErrorHandler.handle_workflow_error(e, request.language)
+            return ChatResponse(**error_response)
         except Exception as e:
-            # Handle workflow execution errors
-            return ChatResponse(
-                type="Error",
-                answerAI=f"Xin lỗi, đã xảy ra lỗi hệ thống: {str(e)}",
-                sources=[],
-                suggestions=[
-                    {
-                        "label": "Thử lại",
-                        "action": "retry",
-                        "data": {}
-                    }
-                ]
-            )
+            # Handle unknown errors
+            error_response = ErrorHandler.handle_generic_error(e, request.language)
+            return ChatResponse(**error_response)
     
     def get_workflow_graph(self) -> Dict[str, Any]:
         """Get workflow graph for visualization"""
@@ -641,15 +1160,19 @@ Return only: service or booking or qna"""
             "nodes": [
                 {"id": "validate_platform", "type": "validation"},
                 {"id": "classify_intent", "type": "classification"},
+                {"id": "rewrite_to_standalone", "type": "rewriting"},
                 {"id": "route_to_agent", "type": "routing"},
                 {"id": "add_cta", "type": "enhancement"},
+                {"id": "enrich_language", "type": "language_enrichment"},
                 {"id": "format_response", "type": "formatting"}
             ],
             "edges": [
                 {"from": "validate_platform", "to": "classify_intent"},
-                {"from": "classify_intent", "to": "route_to_agent"},
+                {"from": "classify_intent", "to": "rewrite_to_standalone"},
+                {"from": "rewrite_to_standalone", "to": "route_to_agent"},
                 {"from": "route_to_agent", "to": "add_cta"},
-                {"from": "add_cta", "to": "format_response"},
+                {"from": "add_cta", "to": "enrich_language"},
+                {"from": "enrich_language", "to": "format_response"},
                 {"from": "format_response", "to": "END"}
             ],
             "conditional_edges": [
@@ -657,6 +1180,11 @@ Return only: service or booking or qna"""
                     "from": "validate_platform",
                     "condition": "error",
                     "to": "END"
+                },
+                {
+                    "from": "rewrite_to_standalone",
+                    "condition": "clarify",
+                    "to": "add_cta"
                 }
             ]
         }
@@ -686,4 +1214,4 @@ Return only: service or booking or qna"""
                 entities_update["user_name"] = m.group(2).strip()
 
         if entities_update:
-            self.memory.set_entities(conversation_id, entities_update)
+            self.memory.update_entities_safe(conversation_id, entities_update, "user_entity_extraction")

@@ -9,6 +9,7 @@ class ChatRequest(BaseModel):
     platform: PlatformType = Field(..., description="Platform type (web_browser or mobile_app)")
     device: DeviceType = Field(..., description="Device type (desktop, android, ios)")
     language: LanguageType = Field(..., description="Language preference (vi or en)")
+    conversationId: Optional[str] = Field(None, description="Optional conversation ID for session management")
     
     class Config:
         json_schema_extra = {
@@ -16,7 +17,8 @@ class ChatRequest(BaseModel):
                 "message": "Tìm nhà hàng gần đây",
                 "platform": "web_browser",
                 "device": "android",
-                "language": "vi"
+                "language": "vi",
+                "conversationId": "optional_conversation_id"
             }
         }
 

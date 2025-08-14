@@ -136,13 +136,23 @@ class TripCAPIClient:
             logger.error(f"Error getting restaurants: {e}")
             return []
     
-    async def get_culinary_passport_suppliers(self, page: int = 1, page_size: int = 100) -> List[Service]:
-        """Get suppliers from Culinary Passport (Hộ chiếu ẩm thực Đà Nẵng)"""
+    async def get_culinary_passport_suppliers(self, page: int = 1, page_size: int = 100, 
+                                            keyword: Optional[str] = None, 
+                                            product_type_id: Optional[int] = None) -> List[Service]:
+        """Get suppliers from Culinary Passport (Hộ chiếu ẩm thực Đà Nẵng) with keyword and product_type filtering"""
         try:
             params = {
                 "page": page,
                 "page_size": page_size
             }
+            
+            # Add keyword search if provided
+            if keyword:
+                params["keyword"] = keyword
+            
+            # Add product_type_id filter if provided
+            if product_type_id:
+                params["product_type_id"] = product_type_id
             
             url = f"{self.base_url}/api/culinary-passport/suppliers"
             response = await self.client.get(url, params=params, headers=self._get_headers())

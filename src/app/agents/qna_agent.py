@@ -3,7 +3,7 @@ from typing import List, Optional, Dict, Any
 from ..models.schemas import QnAResponse, Source, Suggestion
 from ..vector.pgvector_store import get_embedding, embedding_to_pgvector_str, search_similar, ask_llm
 from ..core.platform_context import PlatformContext
-from ..llm.open_client import OpenAIClient
+from ..llm.rate_limited_client import RateLimitedLLMClient
 import logging
 
 logger = logging.getLogger(__name__)
@@ -12,8 +12,13 @@ logger = logging.getLogger(__name__)
 class QnAAgent:
     """QnA Agent using vector embedding search with LLM for natural responses"""
     
-    def __init__(self, llm_client: OpenAIClient = None):
-        self.llm_client = llm_client or OpenAIClient()
+    def __init__(self, vector_store, llm_client: RateLimitedLLMClient = None):
+        self.vector_store = vector_store
+        self.llm_client = llm_client
+        if llm_client is None:
+            from ..llm.open_client import OpenAIClient
+            base_llm_client = OpenAIClient()
+            self.llm_client = RateLimitedLLMClient(base_llm_client)
         
         # Pre-defined QnA content for common queries
         self.common_responses = {

@@ -37,6 +37,8 @@ Platform-aware AI chatbot for TripC ecosystem with **LangGraph-based workflow ar
 - **Restaurant Services**: Direct integration with TripC restaurant APIs
 - **Authentication**: Bearer token authentication
 - **Data Mapping**: TripC API fields → Chatbot response format
+- **Keyword Analysis**: LLM-powered keyword extraction and product type matching
+- **Smart Search**: Product type ID matching based on user queries (no fallback)
 
 ### 📧 **Email Booking Service**
 - **Workflow**: User info → Email to `booking@tripc.ai` → Confirmation email
@@ -93,7 +95,8 @@ tripc-chatbot-api/
 │       │   └── service_agent.py    # TripC API integration
 │       ├── services/
 │       │   ├── email_service.py    # Booking workflow
-│       │   └── tripc_api.py        # TripC API client
+│       │   ├── tripc_api.py        # TripC API client
+│       │   └── keyword_analyzer.py # LLM-powered keyword analysis
 │       ├── vector/
 │       │   └── pgvector_store.py   # Vector embedding storage
 │       ├── models/
@@ -153,7 +156,24 @@ python -m uvicorn src.app.main:app --host 0.0.0.0 --port 8000
 - **API Documentation**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
 - **Status**: http://localhost:8000/api/v1/status
+- **Session Stats**: http://localhost:8000/api/v1/session/stats
 - **Workflow Graph**: http://localhost:8000/api/v1/workflow/graph
+
+## 🔧 Session Management
+
+The chatbot now includes **automatic session management** to prevent message mixing between different users:
+
+- **Auto-generated conversation IDs** for each user
+- **Session tracking and cleanup** 
+- **User identification** via headers or IP/User-Agent
+- **Session statistics** API endpoints
+
+See [SESSION_MANAGEMENT_FIX.md](SESSION_MANAGEMENT_FIX.md) for detailed documentation.
+
+### Test Session Management
+```bash
+python test_session_management.py
+```
 
 ## 🎯 LangGraph Workflow Demo
 
@@ -195,6 +215,72 @@ Main chatbot endpoint with **LangGraph workflow processing**.
       "id": 11,
       "name": "Bông",
       "type": "restaurant",
+```
+
+### POST `/api/v1/restaurants/search-with-analysis`
+
+Tìm kiếm nhà hàng với phân tích từ khóa và product_type_id.
+
+**Request:**
+```json
+{
+  "query": "Tôi muốn tìm nhà hàng hải sản ở Đà Nẵng",
+  "page": 1,
+  "page_size": 15
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "data": {
+    "restaurants": [...],
+    "analysis": {
+      "user_query": "Tôi muốn tìm nhà hàng hải sản ở Đà Nẵng",
+      "keywords": {
+        "proper_nouns": ["Đà Nẵng"],
+        "adjectives": [],
+        "common_nouns": ["nhà hàng", "hải sản"]
+      },
+      "matching_product_type_ids": [22, 15],
+      "province_ids": [4, 47],
+      "total_product_types": 45
+    },
+    "total_found": 12
+  },
+  "timestamp": "2024-01-15T10:30:00"
+}
+```
+
+### POST `/api/v1/keywords/analyze`
+
+Phân tích từ khóa từ câu hỏi người dùng.
+
+**Request:**
+```json
+{
+  "query": "Tìm quán cà phê view đẹp"
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "data": {
+    "user_query": "Tìm quán cà phê view đẹp",
+    "keywords": {
+      "proper_nouns": [],
+      "adjectives": ["đẹp"],
+      "common_nouns": ["quán", "cà phê", "view"]
+    },
+    "matching_product_type_ids": [8, 12],
+    "province_ids": [4, 47],
+    "total_product_types": 45
+  },
+  "timestamp": "2024-01-15T10:30:00"
+}
       "imageUrl": "https://tripc-dev.s3.amazonaws.com/...",
       "address": "500 Núi Thành, Hải Châu, Đà Nẵng",
       "description": "Quán Bông có không gian thoáng mát...",
@@ -253,6 +339,16 @@ Main chatbot endpoint with **LangGraph workflow processing**.
 ### Run Test Suite
 ```bash
 pytest tests/
+```
+
+### Run Keyword Analyzer Test
+```bash
+python test_keyword_analyzer.py
+```
+
+### Run Keyword Analyzer Demo
+```bash
+python demo_keyword_analyzer.py
 ```
 
 ### Run LangGraph Demo

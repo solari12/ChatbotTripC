@@ -51,18 +51,18 @@ async def lifespan(app: FastAPI):
     llm_client = OpenAIClient()  # Automatically loads from .env
     print("✅ LLM client initialized")
     
+    # Initialize email service (needed for conversational booking)
+    email_service = EmailService()
+    print("✅ Email service initialized")
+
     # Initialize agents
     qna_agent = QnAAgent(vector_store)
     service_agent = ServiceAgent(tripc_client)  # Auto-creates LLM client from .env
     print("✅ AI agents initialized")
     
-    # Initialize AI Agent Orchestrator (LangGraph-based)
-    ai_orchestrator = AIAgentOrchestrator(qna_agent, service_agent)  # Auto-creates LLM client from .env
+    # Initialize AI Agent Orchestrator (LangGraph-based) with EmailService
+    ai_orchestrator = AIAgentOrchestrator(qna_agent, service_agent, email_service=email_service)  # Auto-creates LLM client from .env
     print("✅ AI Agent Orchestrator (LangGraph-based) initialized")
-    
-    # Initialize email service
-    email_service = EmailService()
-    print("✅ Email service initialized")
     
     print("🎉 TripC.AI Chatbot API ready!")
     

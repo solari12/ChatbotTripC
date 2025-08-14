@@ -11,10 +11,12 @@ from ..models.platform_models import PlatformContext, PlatformType, DeviceType, 
 from ..models.schemas import ChatRequest, ChatResponse, QnAResponse
 from ..agents.qna_agent import QnAAgent
 from ..agents.service_agent import ServiceAgent
+from ..agents.booking_agent import BookingAgent
 from ..core.cta_engine import CTAEngine
 from ..core.conversation_memory import ConversationMemory
 
 from ..llm.open_client import OpenAIClient
+from ..services.email_service import EmailService
 
 
 class WorkflowState(TypedDict):
@@ -39,12 +41,13 @@ class WorkflowState(TypedDict):
 class AIAgentOrchestrator:
     """AI Agent Orchestrator - LangGraph-based workflow for TripC.AI Chatbot"""
     
-    def __init__(self, qna_agent: QnAAgent, service_agent: ServiceAgent, llm_client: OpenAIClient = None):
+    def __init__(self, qna_agent: QnAAgent, service_agent: ServiceAgent, llm_client: OpenAIClient = None, email_service: Optional[EmailService] = None):
         self.qna_agent = qna_agent
         self.service_agent = service_agent
         self.llm_client = llm_client or OpenAIClient()  # Auto-create if not provided
         self.cta_engine = CTAEngine()
         self.memory = ConversationMemory()
+        self.booking_agent = BookingAgent(self.memory, email_service, self.llm_client, service_agent)
 
         self.workflow = self._build_workflow()
     
@@ -202,33 +205,103 @@ Return only: service or booking or qna"""
             # Heuristic pronoun resolution
             def heuristic_fill(msg: str) -> Optional[str]:
                 lower = msg.lower()
-                pronouns_vi = ["ở đó", "nó", "chỗ đó", "nơi đó"]
-                pronouns_en = ["there", "it", "that place"]
+                pronouns_vi = ["ở đó", "nó", "chỗ đó", "nơi đó", "đó", "đấy", "cái đó", "điều đó"]
+                pronouns_en = ["there", "it", "that place", "that", "this"]
                 pronouns = pronouns_vi + pronouns_en
                 if any(p in lower for p in pronouns):
-                    place = entities.get("current_place") or entities.get("last_mentioned_place")
-                    if place:
+                    # Infer subject from memory or recent user turns
+                    subject = (
+                        entities.get("current_place")
+                        or entities.get("last_mentioned_place")
+                        or entities.get("current_topic")
+                        or entities.get("last_subject")
+                    )
+                    if not subject:
+                        # find last user message
+                        for turn in reversed(recent_turns):
+                            if turn.get("role") == "user":
+                                cand = turn.get("content")
+                                if cand and cand.strip() and cand.strip() != msg.strip():
+                                    subject = cand.strip()
+                                    break
+                    if subject:
                         filled = msg
                         for p in pronouns_vi:
-                            filled = filled.replace(p, place)
+                            filled = filled.replace(p, subject)
                         for p in pronouns_en:
-                            filled = filled.replace(p, place)
+                            filled = filled.replace(p, subject)
                         return filled
                 return None
 
             rewritten = heuristic_fill(message)
 
+            # LLM-based pronoun resolution and clarification if still ambiguous
             if not rewritten and self.llm_client and self.llm_client.is_configured():
                 history_text = "\n".join([f"{t['role']}: {t['content']}" for t in recent_turns])
-                sys_vi = "Viết lại câu sau thành một câu độc lập, sử dụng ngữ cảnh hội thoại:"
-                sys_en = "Rewrite the following into a standalone question, using the chat context:"
-                system = sys_vi if language == "vi" else sys_en
-                prompt = f"{system}\n\nContext:\n{history_text}\n\nUser: {message}\nStandalone:"
-                out = self.llm_client.generate_response(prompt, max_tokens=80, temperature=0.2)
+                subjects = {
+                    "current_place": entities.get("current_place"),
+                    "last_mentioned_place": entities.get("last_mentioned_place"),
+                    "current_topic": entities.get("current_topic"),
+                    "last_subject": entities.get("last_subject"),
+                }
+                if language == "vi":
+                    system = (
+                        "Bạn là trợ lý suy luận ngữ cảnh. NHIỆM VỤ: nếu câu của người dùng dùng đại từ mơ hồ "
+                        "(ví dụ: 'ở đó', 'cái đó', 'nó', 'đó') thì hãy QUYẾT ĐỊNH:\n"
+                        "- Nếu xác định được chủ thể từ ngữ cảnh, trả về JSON: {\"action\":\"rewrite\", \"rewritten\": \"...\"}\n"
+                        "- Nếu KHÔNG chắc chắn, trả về JSON: {\"action\":\"clarify\", \"question\": \"Câu hỏi làm rõ ngắn gọn\"}\n"
+                        "KHÔNG trả lời tự do, CHỈ JSON."
+                    )
+                    user = (
+                        f"Ngữ cảnh:\n{history_text}\n\n"
+                        f"Chủ thể gợi ý: {subjects}\n\n"
+                        f"Câu người dùng: {message}\n"
+                        "Trả về JSON."
+                    )
+                else:
+                    system = (
+                        "You are a context reasoner. If the user message uses ambiguous pronouns "
+                        "(e.g., 'there', 'it', 'that'), DECIDE:\n"
+                        "- If you can infer the subject from context, return JSON: {\"action\":\"rewrite\", \"rewritten\": \"...\"}\n"
+                        "- If NOT confident, return JSON: {\"action\":\"clarify\", \"question\": \"Short clarification question\"}\n"
+                        "Return JSON ONLY."
+                    )
+                    user = (
+                        f"Context:\n{history_text}\n\n"
+                        f"Subject hints: {subjects}\n\n"
+                        f"User message: {message}\n"
+                        "Return JSON."
+                    )
+                prompt = f"System: {system}\n\nUser: {user}"
+                out = self.llm_client.generate_response(prompt, max_tokens=160, temperature=0.1)
                 if out:
-                    rewritten = out.strip()
+                    try:
+                        import json, re
+                        m = re.search(r"\{[\s\S]*\}", out)
+                        if m:
+                            data = json.loads(m.group(0))
+                            action = (data.get("action") or "").lower()
+                            if action == "rewrite" and data.get("rewritten"):
+                                rewritten = str(data["rewritten"]).strip()
+                            elif action == "clarify" and data.get("question"):
+                                # Ask clarification in next node
+                                state["needs_clarification"] = True
+                                state["clarify_question"] = str(data["question"]).strip()
+                    except Exception:
+                        pass
 
             state["message"] = rewritten or message
+            # Persist resolved subject for next turns if we changed the message
+            if rewritten and rewritten != message:
+                try:
+                    # Save a lightweight subject for future references
+                    subject_hint = rewritten
+                    self.memory.set_entities(conversation_id, {
+                        "last_subject": subject_hint,
+                        "current_topic": subject_hint
+                    })
+                except Exception:
+                    pass
             return state
         except Exception as e:
             print(f"❌ Rewrite error: {e}")
@@ -316,6 +389,37 @@ Return only: service or booking or qna"""
         conversation_id = state.get("conversationId") or "default"
         
         try:
+            # If clarification is needed, ask user instead of proceeding
+            if state.get("needs_clarification"):
+                ask = state.get("clarify_question") or (
+                    "Bạn đang nói đến địa điểm hay nội dung nào ạ?" if platform_context.language.value == "vi"
+                    else "Which place or topic do you mean?"
+                )
+                ask_response = QnAResponse(
+                    type="QnA",
+                    answerAI=ask,
+                    sources=[],
+                    suggestions=[
+                        {"label": ("Mô tả rõ" if platform_context.language.value == "vi" else "Specify"), "action": "clarify_subject"}
+                    ]
+                )
+                state["response"] = ask_response.dict()
+                # Clear one-shot clarification flags
+                state.pop("needs_clarification", None)
+                state.pop("clarify_question", None)
+                return state
+
+            # Persist booking flow across turns: if booking is in progress, keep routing to booking
+            try:
+                entities = self.memory.get_entities(conversation_id)
+                booking_state = entities.get("booking") if isinstance(entities, dict) else None
+                if booking_state and isinstance(booking_state, dict):
+                    status = booking_state.get("status")
+                    if status in ("collecting", "ready"):
+                        intent = "booking"
+            except Exception:
+                pass
+
             if intent == "service":
                 # Route to service agent
                 response = await self.service_agent.get_services(
@@ -339,34 +443,13 @@ Return only: service or booking or qna"""
                     pass
                 
             elif intent == "booking":
-                # For booking, provide clear, localized guidance and CTA to collect info via separate endpoint
-                lang = platform_context.language.value if platform_context and platform_context.language else "vi"
-                if lang == "vi":
-                    answer_text = (
-                        "Tôi hiểu bạn muốn đặt chỗ. Vui lòng để lại họ tên, email, số điện thoại và yêu cầu chi tiết. "
-                        "Bạn có thể bấm \"Đặt bàn ngay\" để nhập thông tin."
-                    )
-                    suggestions = [
-                        {"label": "Đặt bàn ngay", "detail": "Để lại thông tin để nhận hỗ trợ đặt bàn", "action": "collect_user_info"},
-                        {"label": "Xem thêm nhà hàng", "detail": "Gợi ý thêm địa điểm phù hợp", "action": "show_more_services"}
-                    ]
-                else:
-                    answer_text = (
-                        "I understand you want to make a reservation. Please leave your full name, email, phone number and details. "
-                        "Tap \"Book now\" to enter your information."
-                    )
-                    suggestions = [
-                        {"label": "Book now", "detail": "Leave your info for reservation support", "action": "collect_user_info"},
-                        {"label": "See more restaurants", "detail": "More matching places", "action": "show_more_services"}
-                    ]
-
-                response = QnAResponse(
-                    type="QnA",
-                    answerAI=answer_text,
-                    sources=[],
-                    suggestions=suggestions
+                # Conversational booking flow via BookingAgent
+                booking_response = await self.booking_agent.handle(
+                    conversation_id=conversation_id,
+                    message=message,
+                    platform_context=platform_context,
                 )
-                state["response"] = response.dict()
+                state["response"] = booking_response.dict()
                 
             else:
                 # Route to QnA agent
@@ -375,6 +458,17 @@ Return only: service or booking or qna"""
                     platform_context=platform_context
                 )
                 state["response"] = response.dict()
+                # Store topic/subject to help resolve follow-ups like "ở đó/cái đó"
+                try:
+                    sources = state["response"].get("sources") or []
+                    top_title = sources[0].get("title") if sources else None
+                    subject = top_title or message
+                    self.memory.set_entities(conversation_id, {
+                        "last_subject": subject,
+                        "current_topic": subject
+                    })
+                except Exception:
+                    pass
             
             return state
             

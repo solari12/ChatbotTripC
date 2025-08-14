@@ -16,6 +16,9 @@ OPENAI_API_KEY=your_openai_api_key_here
 # TripC API base URL
 TRIPC_API_BASE_URL=https://api.tripc.ai
 
+# TripC API access token (required for production; if omitted, the app may try auto-login)
+TRIPC_API_TOKEN=your_tripc_api_token_here
+
 # =============================================================================
 # 🗄️ Database (Optional - for production)
 # =============================================================================
@@ -70,7 +73,7 @@ ENABLE_EMAIL_BOOKING=true
 ENABLE_PLATFORM_CTA=true
 
 PG_HOST=localhost
-PG_PORT=5433
+PG_PORT=5432
 PG_USER=postgres
 PG_PASSWORD=123456
 PG_DATABASE=postgres

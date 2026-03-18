@@ -9,7 +9,7 @@ Platform-aware AI chatbot for TripC ecosystem with **LangGraph-based workflow ar
 - **State Management**: Centralized state handling across workflow nodes
 - **Error Handling**: Graceful error handling with early termination
 - **Extensibility**: Easy to add new nodes and modify flow
-- **Debugging**: Better visibility into workflow execution
+- **Debugging**: Better visibility into workflow execution  
 
 ### 🏗️ **Platform-Aware Architecture**
 - **Multi-Platform Support**: Web browsers + Mobile apps
